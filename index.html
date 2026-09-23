@@ -1,0 +1,1832 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Audio Splitter - ตัดแบ่งไฟล์เสียงระดับสตูดิโอ</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.all.min.js"></script>
+  <!-- mpg123-decoder: ถอดรหัส MP3 ความเร็วสูง (WASM) -->
+  <script src="mpg123-decoder.min.js"></script>
+  <script>
+    if (!window['mpg123-decoder']) {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/mpg123-decoder@0.3.18/dist/mpg123-decoder.min.js"><\/script>');
+    }
+  </script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --wave-bg: #ffffff;
+      --danger: #ef4444;
+      --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+    body { background: var(--bg); color: var(--text-main); padding: 24px 12px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 720px; }
+
+    /* Header & Privacy Badge */
+    .header { text-align: center; margin-bottom: 18px; }
+    .header h1 { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.5px; }
+    .header p { font-size: 0.86rem; color: var(--text-muted); margin-top: 4px; }
+
+    .privacy-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #ecfdf5; border: 1px solid #a7f3d0;
+      color: #065f46; font-size: 0.74rem; font-weight: 600;
+      padding: 4px 10px; border-radius: 999px; margin-top: 8px;
+    }
+    .privacy-dot {
+      width: 7px; height: 7px; background: #10b981; border-radius: 50%;
+      box-shadow: 0 0 6px rgba(16, 185, 129, 0.7);
+    }
+
+    /* Main Card */
+    .main-card {
+      background: var(--card-bg); border-radius: 18px; padding: 22px;
+      box-shadow: 0 4px 25px rgba(0,0,0,0.04); border: 1px solid var(--border);
+    }
+
+    /* Dropzone */
+    .dropzone {
+      border: 2px dashed #cbd5e1; border-radius: 14px; padding: 32px 16px;
+      text-align: center; background: #fafafa; cursor: pointer;
+      position: relative; transition: all 0.2s ease;
+    }
+    .dropzone:hover { border-color: #0f172a; background: #f4f4f5; }
+    .dropzone.drag-active { border-color: #000; background: #e4e4e7; transform: scale(1.01); }
+    .dropzone input[type="file"] {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      opacity: 0; cursor: pointer; font-size: 0;
+    }
+    .drop-icon { font-size: 2.2rem; margin-bottom: 6px; }
+    .drop-title { font-size: 0.98rem; font-weight: 600; color: #0f172a; }
+    .drop-sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 4px; }
+
+    /* Loading Spinner */
+    .loading-box { display: none; text-align: center; padding: 26px; }
+    .spinner {
+      width: 32px; height: 32px; border: 3px solid #e2e8f0;
+      border-top-color: #0f172a; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 0 auto 10px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-txt { font-size: 0.86rem; color: var(--text-muted); font-weight: 500; }
+
+    /* Preview Section */
+    .preview-section { display: none; margin-top: 18px; }
+
+    /* File Info Strip */
+    .file-strip {
+      display: flex; justify-content: space-between; align-items: center;
+      background: #f4f4f5; padding: 9px 14px; border-radius: 10px;
+      font-size: 0.82rem; margin-bottom: 14px;
+    }
+    .file-strip-name { font-weight: 600; word-break: break-all; color: #09090b; }
+    .file-strip-change { color: #2563eb; cursor: pointer; font-weight: 500; margin-left: 8px; white-space: nowrap; }
+
+    /* Waveform Card */
+    .wave-card {
+      background: var(--wave-bg); border-radius: 14px; padding: 16px;
+      margin-bottom: 16px; border: 1px solid #cbd5e1;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.03); position: relative;
+    }
+    .wave-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px; font-size: 0.82rem; gap: 8px; flex-wrap: wrap;
+    }
+    .wave-play-ctrl { display: flex; align-items: center; gap: 9px; }
+    .btn-circle-play {
+      width: 34px; height: 34px; border-radius: 50%; background: #2563eb;
+      color: #fff; border: none; cursor: pointer; display: flex;
+      align-items: center; justify-content: center; font-size: 0.85rem;
+      box-shadow: 0 2px 8px rgba(37,99,235,0.3); transition: transform 0.1s, background 0.15s;
+    }
+    .btn-circle-play:hover { background: #1d4ed8; transform: scale(1.06); }
+    .time-counter {
+      font-family: monospace; font-size: 0.86rem; font-weight: 700; color: #1e293b;
+    }
+
+    /* Wave Toolbar */
+    .wave-toolbar { display: flex; align-items: center; gap: 6px; }
+    .tool-btn {
+      padding: 4px 8px; font-size: 0.72rem; font-weight: 600; border-radius: 5px;
+      border: 1px solid var(--border); background: #ffffff; color: #334155;
+      cursor: pointer; transition: all 0.12s ease;
+    }
+    .tool-btn:hover { background: #f1f5f9; border-color: #94a3b8; }
+    .tool-btn.active { background: #0f172a; color: #ffffff; border-color: #0f172a; }
+    .cut-info-badge {
+      font-size: 0.76rem; background: #fee2e2; border: 1px solid #fca5a5;
+      padding: 4px 9px; border-radius: 6px; font-weight: 700; color: #dc2626;
+    }
+
+    /* Wave Progress Strip (หลอดความคืบหน้าตรงหัวคลื่นเสียง) */
+    .wave-progress-strip {
+      display: none; background: #f1f5f9; border-radius: 8px; padding: 8px 12px;
+      margin-bottom: 10px; border: 1px solid #cbd5e1;
+      animation: fadeIn 0.2s ease;
+    }
+    .wave-progress-strip-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 0.78rem; font-weight: 600; color: #0f172a; margin-bottom: 5px;
+    }
+    .wave-progress-strip-track {
+      height: 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden;
+    }
+    .wave-progress-strip-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #2563eb, #3b82f6);
+      border-radius: 999px;
+      box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+    }
+
+    /* Active Waveform Progress Highlight Overlay (ไฮไลต์บนตัวคลื่นเสียง) */
+    .wave-progress-highlight {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 0%;
+      background: linear-gradient(90deg, rgba(37, 99, 235, 0.08) 0%, rgba(59, 130, 246, 0.16) 60%, rgba(96, 165, 250, 0.28) 100%);
+      pointer-events: none; display: none; z-index: 12;
+      border-right: 2px solid #3b82f6;
+      box-shadow: 2px 0 16px rgba(59, 130, 246, 0.5);
+    }
+    @keyframes pulseScanner {
+      0%, 100% { opacity: 0.9; box-shadow: 0 0 14px rgba(59, 130, 246, 0.8), 0 0 4px #93c5fd; }
+      50% { opacity: 1; box-shadow: 0 0 20px rgba(59, 130, 246, 1), 0 0 8px #60a5fa; }
+    }
+    .wave-progress-edge {
+      position: absolute; right: -1px; top: 0; bottom: 0; width: 3px;
+      background: #60a5fa;
+      animation: pulseScanner 1.2s ease-in-out infinite;
+    }
+    .wave-progress-badge {
+      position: absolute; right: 8px; top: 6px;
+      background: #0f172a; color: #ffffff; font-size: 0.68rem;
+      padding: 2px 7px; border-radius: 4px; font-family: monospace; font-weight: 700;
+      white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+
+    /* Scrollable Canvas Box (Zoom support) */
+    .canvas-scroll-wrap {
+      width: 100%; overflow-x: auto; overflow-y: hidden;
+      border-radius: 8px; position: relative;
+    }
+    .canvas-scroll-wrap::-webkit-scrollbar { height: 6px; }
+    .canvas-scroll-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+
+    .canvas-container {
+      position: relative; width: 100%; height: 135px;
+      cursor: crosshair; user-select: none;
+    }
+    #waveCanvas {
+      width: 100%; height: 135px; display: block;
+    }
+
+    /* Needles */
+    .playhead-needle {
+      position: absolute; top: 0; bottom: 0; left: 0%; width: 2px;
+      background: #10b981; pointer-events: none; display: none; z-index: 15;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.85);
+    }
+    .playhead-needle::after {
+      content: ''; position: absolute; top: -4px; left: -4px;
+      width: 10px; height: 10px; background: #10b981; border-radius: 50%;
+      border: 2px solid #ffffff; box-shadow: 0 0 8px rgba(16, 185, 129, 0.9);
+    }
+    .hover-indicator {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 1px;
+      background: rgba(30, 41, 59, 0.45); pointer-events: none; display: none; z-index: 9;
+    }
+    .hover-badge {
+      position: absolute; top: 4px; left: 6px; background: #0f172a;
+      color: #fff; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px;
+      font-family: monospace; font-weight: 600; white-space: nowrap;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+
+    /* Waveform Tips Bar */
+    .wave-tips {
+      margin-top: 8px; font-size: 0.74rem; color: #64748b; line-height: 1.4;
+      display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px;
+    }
+    .wave-tips span { display: inline-flex; align-items: center; gap: 4px; }
+
+    /* Controls Grid */
+    .controls-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;
+    }
+
+    .ctrl-group label {
+      display: block; font-size: 0.82rem; font-weight: 600;
+      color: var(--text-muted); margin-bottom: 6px;
+    }
+    select, input[type="number"], input[type="text"] {
+      width: 100%; padding: 9px 12px; border: 1px solid var(--border);
+      border-radius: 8px; font-size: 0.88rem; background: #fff; color: var(--text-main);
+    }
+    select:focus, input:focus { outline: none; border-color: #0f172a; }
+
+    .custom-row {
+      display: none; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.82rem;
+    }
+    .custom-row input { width: 90px; }
+
+    /* Advanced Options Card */
+    .adv-options {
+      background: #fafafa; border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px; margin-bottom: 16px;
+    }
+    .opt-row {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 0.82rem; padding: 6px 0;
+    }
+    .opt-row:not(:last-child) { border-bottom: 1px dashed var(--border); }
+    .opt-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 500; }
+    .opt-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: #0f172a; cursor: pointer; }
+    .opt-desc { font-size: 0.72rem; color: var(--text-muted); margin-left: 24px; }
+
+    /* Naming Pattern Box */
+    .naming-box { margin-top: 8px; font-size: 0.82rem; }
+    .naming-box label { font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px; }
+    .naming-input-wrap { display: flex; gap: 6px; margin-bottom: 6px; }
+    .naming-tags { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 4px; }
+    .tag-btn {
+      font-size: 0.7rem; padding: 2px 7px; background: #e2e8f0; border: none;
+      border-radius: 4px; cursor: pointer; color: #1e293b; font-family: monospace;
+    }
+    .tag-btn:hover { background: #cbd5e1; }
+    .naming-preview { font-size: 0.74rem; color: #64748b; font-family: monospace; }
+
+    /* Action Buttons */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 100%; padding: 13px; border: none; border-radius: 10px;
+      font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background 0.15s;
+    }
+    .btn-main { background: var(--primary); color: #fff; }
+    .btn-main:hover { background: var(--primary-hover); }
+    .btn-main:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn-secondary { background: #059669; color: #fff; }
+    .btn-sm {
+      width: auto; padding: 6px 12px; font-size: 0.8rem; border-radius: 6px;
+      background: #0f172a; color: #fff;
+    }
+    .btn-outline { background: #fff; border: 1px solid var(--border); color: #0f172a; }
+    .btn-outline:hover { background: #f4f4f5; }
+
+    /* Progress Export */
+    .export-progress { display: none; margin-top: 14px; text-align: center; }
+    .p-bar { height: 8px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin-bottom: 6px; }
+    .p-fill { height: 100%; background: #0f172a; width: 0%; transition: width 0.15s; }
+    .p-txt { font-size: 0.82rem; color: var(--text-muted); }
+
+    /* Results */
+    .results-area {
+      display: none; margin-top: 20px; border-top: 1px solid var(--border);
+      padding-top: 16px;
+    }
+    .results-header {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;
+    }
+    .results-title { font-size: 0.95rem; font-weight: 700; }
+    .chunk-item {
+      display: flex; justify-content: space-between; align-items: center;
+      background: #fafafa; border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 14px; margin-bottom: 8px; gap: 8px;
+    }
+    .chunk-meta { min-width: 0; flex: 1; }
+    .chunk-title { font-weight: 600; font-size: 0.84rem; word-break: break-all; }
+    .chunk-time { font-size: 0.76rem; color: var(--text-muted); margin-top: 2px; }
+    .chunk-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+    /* Keyboard Shortcuts Footer */
+    .kbd-footer {
+      margin-top: 18px; text-align: center; font-size: 0.74rem; color: #94a3b8;
+    }
+    kbd {
+      background: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 3px;
+      padding: 1px 5px; font-family: monospace; font-size: 0.72rem; color: #1e293b;
+    }
+
+    .error-card {
+      display: none; background: #fef2f2; border-left: 4px solid #ef4444;
+      padding: 12px; border-radius: 8px; font-size: 0.84rem; color: #991b1b;
+      margin-top: 14px; line-height: 1.5; white-space: pre-line;
+    }
+
+    /* ============================================================
+       RESPONSIVE DESIGN BREAKPOINTS
+       ============================================================ */
+    .wave-header-top {
+      display: flex; align-items: center; gap: 10px;
+    }
+
+    /* 1. Desktop & Wide Screens (>= 860px) */
+    @media (min-width: 860px) {
+      .container { max-width: 880px; }
+      .main-card { padding: 26px 28px; border-radius: 20px; }
+      .wave-card { padding: 20px 22px; }
+      .canvas-container { height: 145px; }
+      #waveCanvas { height: 145px; }
+      .controls-grid { gap: 16px; margin-bottom: 16px; }
+    }
+
+    /* 2. Tablet Screens (561px - 859px) */
+    @media (min-width: 561px) and (max-width: 859px) {
+      .container { max-width: 740px; }
+      .main-card { padding: 20px; border-radius: 16px; }
+      .wave-card { padding: 16px; }
+      .controls-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+    }
+
+    /* 3. Mobile Phones (<= 560px) */
+    @media (max-width: 560px) {
+      body { padding: 12px 8px; }
+      .container { max-width: 100%; }
+      .header { margin-bottom: 14px; }
+      .header h1 { font-size: 1.25rem; }
+      .header p { font-size: 0.8rem; }
+      .privacy-badge { font-size: 0.68rem; padding: 3px 8px; line-height: 1.3; text-align: left; }
+
+      .main-card { padding: 14px 12px; border-radius: 14px; }
+      .dropzone { padding: 22px 10px; }
+      .drop-icon { font-size: 1.8rem; }
+      .drop-title { font-size: 0.88rem; }
+      .drop-sub { font-size: 0.74rem; }
+
+      /* Mobile Waveform Card */
+      .wave-card { padding: 12px 10px; border-radius: 12px; margin-bottom: 12px; }
+      .wave-header { flex-direction: column; align-items: stretch; gap: 8px; }
+      .wave-header-top { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+      .wave-toolbar { width: 100%; justify-content: space-between; gap: 3px; }
+      .wave-toolbar .zoom-label { display: none; }
+      .wave-toolbar .tool-btn { flex: 1; text-align: center; padding: 7px 2px; font-size: 0.74rem; min-height: 36px; border-radius: 6px; }
+      .cut-info-badge { white-space: nowrap; font-size: 0.72rem; padding: 4px 6px; }
+
+      .canvas-container { height: 135px; touch-action: none; }
+      #waveCanvas { height: 135px; }
+      .wave-tips { font-size: 0.69rem; flex-direction: column; gap: 3px; }
+
+      /* Mobile Controls Grid */
+      .controls-grid { grid-template-columns: 1fr; gap: 10px; margin-bottom: 10px; }
+      select, input[type="number"], input[type="text"] {
+        font-size: 16px !important; /* ป้องกัน iOS Auto-Zoom */
+        padding: 10px 12px;
+      }
+      .naming-tags { gap: 4px; }
+      .tag-btn { padding: 4px 8px; font-size: 0.72rem; }
+
+      /* Large Touch CTA Button */
+      .btn { padding: 14px; font-size: 0.95rem; border-radius: 10px; }
+      .btn-main { box-shadow: 0 4px 14px rgba(37,99,235,0.3); }
+
+      /* Chunk Items on Mobile */
+      .chunk-item { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 12px; }
+      .chunk-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .chunk-actions .btn { width: 100%; min-height: 38px; }
+
+      /* Hide keyboard shortcuts on touch devices */
+      .kbd-footer { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Audio Splitter Studio</h1>
+      <p>ตัดแบ่งไฟล์เสียงขนาดใหญ่ความเร็วสูง พรีวิวรอยตัดแบบเรียลไทม์</p>
+      <div class="privacy-badge">
+        <span class="privacy-dot"></span>
+        <span>100% Client-Side Private • ข้อมูลเสียงประมวลผลบนเครื่องของคุณ ไม่ส่งขึ้นเซิร์ฟเวอร์</span>
+      </div>
+    </div>
+
+    <div class="main-card">
+      <!-- 1. Dropzone -->
+      <div id="uploadWrap">
+        <label class="dropzone" id="dropLabel">
+          <input type="file" id="audioFileInput" accept="audio/*, .mp3, .wav, .m4a, .aac, .flac, .ogg, .weba, .opus">
+          <div class="drop-icon">🎵</div>
+          <div class="drop-title">ลากไฟล์เสียงมาวางที่นี่ หรือ คลิกเพื่อเลือกไฟล์</div>
+          <div class="drop-sub">รองรับ MP3, WAV, M4A, AAC, FLAC, OGG ทุกขนาดไฟล์</div>
+        </label>
+      </div>
+
+      <!-- Loading State -->
+      <div class="loading-box" id="loadingBox">
+        <div class="spinner"></div>
+        <div class="loading-txt" id="loadingTxt">กำลังอ่านและสร้างคลื่นเสียง...</div>
+      </div>
+
+      <!-- Error Card -->
+      <div class="error-card" id="errorCard"></div>
+
+      <!-- 2. Preview Section -->
+      <div class="preview-section" id="previewSection">
+        <!-- File Info -->
+        <div class="file-strip">
+          <div>
+            <span class="file-strip-name" id="stripFileName">-</span>
+            <span style="color:#64748b; font-size:0.75rem; margin-left:6px;" id="stripFileSize">-</span>
+          </div>
+          <div class="file-strip-change" onclick="triggerFileSelect()">เปลี่ยนไฟล์</div>
+        </div>
+
+        <!-- Waveform Card -->
+        <div class="wave-card">
+          <div class="wave-header">
+            <div class="wave-header-top">
+              <div class="wave-play-ctrl">
+                <button class="btn-circle-play" id="btnWavePlay" onclick="toggleWavePlay()" title="เล่น/หยุด (Spacebar)">▶</button>
+                <div class="time-counter" id="timeCounter">00:00:00 / 00:00:00</div>
+              </div>
+              <div class="cut-info-badge" id="cutBadge">4 ท่อน</div>
+            </div>
+
+            <!-- Toolbar: Zoom & Tools -->
+            <div class="wave-toolbar">
+              <span class="zoom-label" style="font-size:0.72rem; color:#64748b;">ซูม:</span>
+              <button class="tool-btn active" id="btnZoom1" onclick="setZoom(1)">1x</button>
+              <button class="tool-btn" id="btnZoom2" onclick="setZoom(2)">2x</button>
+              <button class="tool-btn" id="btnZoom4" onclick="setZoom(4)">4x</button>
+              <button class="tool-btn" onclick="auditionNearestCut()" title="ฟังตัวอย่างรอยตัด 3 วินาทีก่อน-หลัง">ฟังรอยตัด</button>
+              <button class="tool-btn" onclick="recalculateCutsAndRedraw()" title="รีเซ็ตตำแหน่งตัดอัตโนมัติ">รีเซ็ต</button>
+            </div>
+          </div>
+
+          <!-- หลอดบอกความคืบหน้าตรงหัวคลื่นเสียง (Waveform Progress Strip) -->
+          <div class="wave-progress-strip" id="waveProgressStrip">
+            <div class="wave-progress-strip-header">
+              <span id="waveProgressStripTxt">กำลังเตรียมการตัดแบ่ง...</span>
+              <span id="waveProgressStripPct" style="font-family: monospace; font-weight: 700;">0%</span>
+            </div>
+            <div class="wave-progress-strip-track">
+              <div class="wave-progress-strip-fill" id="waveProgressStripFill"></div>
+            </div>
+          </div>
+
+          <!-- Canvas Scroll Wrap -->
+          <div class="canvas-scroll-wrap" id="canvasScrollWrap">
+            <div class="canvas-container" id="canvasBox">
+              <canvas id="waveCanvas"></canvas>
+              <!-- Highlight Overlay บนคลื่นเสียงตามความคืบหน้า -->
+              <div id="waveProgressHighlight" class="wave-progress-highlight">
+                <div class="wave-progress-edge"></div>
+                <div class="wave-progress-badge" id="waveProgressBadge">0%</div>
+              </div>
+              <div id="playhead" class="playhead-needle"></div>
+              <div id="hoverLine" class="hover-indicator">
+                <span id="hoverTag" class="hover-badge">00:00:00</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Helper Tips -->
+          <div class="wave-tips">
+            <span>• <strong>คลิกลากเส้นแดง:</strong> ปรับขยับรอยตัดอิสระ</span>
+            <span>• <strong>ดับเบิลคลิก:</strong> เพิ่มจุดตัดใหม่</span>
+            <span>• <strong>คลิกขวาที่เส้น:</strong> ลบจุดตัด</span>
+          </div>
+        </div>
+
+        <!-- Controls: Duration & Format -->
+        <div class="controls-grid">
+          <div class="ctrl-group">
+            <label>ระยะเวลาท่อน (คำนวณอัตโนมัติ):</label>
+            <select id="durationSelect" onchange="onDurationChange()">
+              <option value="600">10 นาที / ท่อน</option>
+              <option value="900">15 นาที / ท่อน</option>
+              <option value="1200">20 นาที (แนะนำ Whisper AI)</option>
+              <option value="1800" selected>30 นาที (ค่ามาตรฐาน)</option>
+              <option value="2700">45 นาที / ท่อน</option>
+              <option value="3600">60 นาที (1 ชั่วโมง)</option>
+              <option value="custom">กำหนดเวลาเอง...</option>
+            </select>
+            <div class="custom-row" id="customRow">
+              <span>ท่อนละ:</span>
+              <input type="number" id="customMinutes" min="1" max="300" value="25" oninput="onCustomMinutesInput()">
+              <span>นาที</span>
+            </div>
+          </div>
+
+          <div class="ctrl-group">
+            <label>รูปแบบไฟล์ผลลัพธ์:</label>
+            <select id="formatSelect" onchange="updateNamingPreview()">
+              <option value="mp3_lossless" selected>MP3 - ตัดตรงทันที (Lossless Stream, เร็วที่สุด)</option>
+              <option value="wav">WAV - คุณภาพสตูดิโอ (PCM 16-bit ไม่บีบอัด)</option>
+              <option value="mp3">MP3 - Re-encode (192 kbps)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Advanced Options & Anti-Click -->
+        <div class="adv-options">
+          <div class="opt-row">
+            <div>
+              <label class="opt-label">
+                <input type="checkbox" id="smartSplitCheck" checked onchange="recalculateCutsAndRedraw()">
+                <span>Smart Split: ค้นหาช่วงเงียบอัตโนมัติ</span>
+              </label>
+              <div class="opt-desc">ค้นหาช่วงเสียงเงียบ ±15 วินาทีรอบรอยตัด ป้องกันการตัดขาดกลางคำ</div>
+            </div>
+          </div>
+          <div class="opt-row">
+            <div>
+              <label class="opt-label">
+                <input type="checkbox" id="antiClickCheck" checked>
+                <span>Micro-Fade 20ms: ป้องกันเสียงคลิก/เปรี๊ยะที่รอยตัด</span>
+              </label>
+              <div class="opt-desc">ใส่เฟดหัว-ท้ายแบบนุ่มนวลอัตโนมัติ ไร้เสียงสะดุด Zero-crossing</div>
+            </div>
+          </div>
+
+          <!-- Naming Pattern Box -->
+          <div class="naming-box">
+            <label>รูปแบบชื่อไฟล์ที่บันทึก:</label>
+            <div class="naming-input-wrap">
+              <input type="text" id="namingPattern" value="{original}_Part{part}" oninput="updateNamingPreview()">
+            </div>
+            <div class="naming-tags">
+              <span style="font-size:0.72rem; color:#64748b;">แท็ก:</span>
+              <button class="tag-btn" onclick="insertTag('{original}')">{original}</button>
+              <button class="tag-btn" onclick="insertTag('{part}')">{part}</button>
+              <button class="tag-btn" onclick="insertTag('{start}')">{start}</button>
+              <button class="tag-btn" onclick="insertTag('{end}')">{end}</button>
+            </div>
+            <div class="naming-preview" id="namingPreview">ตัวอย่าง: audio_Part01.mp3</div>
+          </div>
+        </div>
+
+        <!-- Main Action Button -->
+        <button class="btn btn-main" id="btnExport" onclick="startExport()">
+          เริ่มตัดแบ่งไฟล์เสียง (<span id="btnExportCount">4</span> ท่อน)
+        </button>
+
+        <!-- Progress Bar during Export -->
+        <div class="export-progress" id="exportProgress">
+          <div class="p-bar"><div class="p-fill" id="pFill"></div></div>
+          <div class="p-txt" id="pTxt">กำลังประมวลผล...</div>
+        </div>
+
+        <!-- Results Area -->
+        <div class="results-area" id="resultsArea">
+          <div class="results-header">
+            <div class="results-title">ไฟล์ที่ตัดเสร็จแล้ว</div>
+            <button class="btn btn-sm btn-secondary" onclick="downloadAllZip()">ดาวน์โหลดทั้งหมด (.ZIP)</button>
+          </div>
+          <div id="chunksContainer"></div>
+        </div>
+
+        <!-- Keyboard Shortcuts -->
+        <div class="kbd-footer">
+          คีย์ลัด: <kbd>Space</kbd> เล่น/หยุด • <kbd>←</kbd> <kbd>→</kbd> กรอ 5s • <kbd>Ctrl + Z</kbd> ยกเลิกการย้ายจุดตัด
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Global States
+    let currentFile = null;
+    let rawArrayBuffer = null;
+    let audioBuffer = null;
+    let totalDurationSec = 0;
+    let cutPointsSec = [];
+    let undoStack = [];
+    let chunks = [];
+    let isPlaying = false;
+    let audioPreviewEl = null;
+    let playheadRaf = null;
+    let exportAnimRaf = null;
+    let zoomLevel = 1;
+    let cutPassTimestamps = {};
+    let completionShimmerProgress = -1;
+
+    // Interactive Dragging States
+    let isDraggingCut = false;
+    let dragCutIndex = -1;
+    let hoverCutIndex = -1;
+
+    // DOM Elements
+    const fileInput       = document.getElementById('audioFileInput');
+    const dropLabel       = document.getElementById('dropLabel');
+    const loadingBox      = document.getElementById('loadingBox');
+    const loadingTxt      = document.getElementById('loadingTxt');
+    const errorCard       = document.getElementById('errorCard');
+    const previewSection  = document.getElementById('previewSection');
+    const stripFileName   = document.getElementById('stripFileName');
+    const stripFileSize   = document.getElementById('stripFileSize');
+    const waveCanvas      = document.getElementById('waveCanvas');
+    const canvasBox       = document.getElementById('canvasBox');
+    const canvasScrollWrap= document.getElementById('canvasScrollWrap');
+    const playhead        = document.getElementById('playhead');
+    const hoverLine       = document.getElementById('hoverLine');
+    const hoverTag        = document.getElementById('hoverTag');
+    const btnWavePlay     = document.getElementById('btnWavePlay');
+    const timeCounter     = document.getElementById('timeCounter');
+    const cutBadge        = document.getElementById('cutBadge');
+    const durationSelect  = document.getElementById('durationSelect');
+    const customRow       = document.getElementById('customRow');
+    const customMinutes   = document.getElementById('customMinutes');
+    const formatSelect    = document.getElementById('formatSelect');
+    const smartSplitCheck = document.getElementById('smartSplitCheck');
+    const antiClickCheck  = document.getElementById('antiClickCheck');
+    const namingPattern   = document.getElementById('namingPattern');
+    const namingPreview   = document.getElementById('namingPreview');
+    const btnExport       = document.getElementById('btnExport');
+    const btnExportCount  = document.getElementById('btnExportCount');
+    const exportProgress  = document.getElementById('exportProgress');
+    const pFill           = document.getElementById('pFill');
+    const pTxt            = document.getElementById('pTxt');
+    const resultsArea     = document.getElementById('resultsArea');
+    const chunksContainer = document.getElementById('chunksContainer');
+
+    // Progress Elements on Waveform
+    const waveProgressStrip     = document.getElementById('waveProgressStrip');
+    const waveProgressStripTxt  = document.getElementById('waveProgressStripTxt');
+    const waveProgressStripPct  = document.getElementById('waveProgressStripPct');
+    const waveProgressStripFill = document.getElementById('waveProgressStripFill');
+    const waveProgressHighlight = document.getElementById('waveProgressHighlight');
+    const waveProgressBadge     = document.getElementById('waveProgressBadge');
+    let currentExportProgressPct = 0;
+
+    function showError(msg) { errorCard.textContent = msg; errorCard.style.display = 'block'; }
+    function hideError()    { errorCard.style.display = 'none'; }
+
+    function formatTime(sec) {
+      if (isNaN(sec) || sec < 0) sec = 0;
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+      return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+    }
+
+    function triggerFileSelect() { fileInput.click(); }
+
+    // ============================================================
+    // DRAG & DROP & FILE SELECTION
+    // ============================================================
+    ['dragenter', 'dragover'].forEach(n => dropLabel.addEventListener(n, e => {
+      e.preventDefault(); e.stopPropagation(); dropLabel.classList.add('drag-active');
+    }));
+    ['dragleave', 'drop'].forEach(n => dropLabel.addEventListener(n, e => {
+      e.preventDefault(); e.stopPropagation(); dropLabel.classList.remove('drag-active');
+    }));
+    dropLabel.addEventListener('drop', e => {
+      const files = e.dataTransfer.files;
+      if (files && files.length) handleFile(files[0]);
+    });
+    fileInput.addEventListener('change', function() {
+      if (this.files && this.files.length) handleFile(this.files[0]);
+    });
+
+    window.addEventListener('dragover', e => e.preventDefault());
+    window.addEventListener('drop', e => e.preventDefault());
+
+    // ============================================================
+    // FAST DECODE PIPELINE (mpg123 WASM + Web Audio Fallback)
+    // ============================================================
+    async function decodeWithMpg123(arrayBuf) {
+      const lib = window['mpg123-decoder'];
+      if (!lib || !lib.MPEGDecoder) throw new Error('mpg123-decoder not ready');
+      const decoder = new lib.MPEGDecoder();
+      await decoder.ready;
+      try {
+        const res = decoder.decode(new Uint8Array(arrayBuf));
+        if (!res || !res.channelData || !res.samplesDecoded) throw new Error('decode empty');
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioCtx();
+        const numCh = res.channelData.length;
+        const buf = ctx.createBuffer(numCh, res.samplesDecoded, res.sampleRate);
+        for (let c = 0; c < numCh; c++) buf.getChannelData(c).set(res.channelData[c]);
+        ctx.close && ctx.close();
+        return buf;
+      } finally {
+        decoder.free();
+      }
+    }
+
+    function decodeRaw(ctx, buf) {
+      return new Promise((resolve, reject) => {
+        try {
+          ctx.decodeAudioData(buf, resolve, e => reject(e instanceof Error ? e : new Error(String(e))));
+        } catch(e) { reject(e); }
+      });
+    }
+
+    async function smartDecode(arrayBuf, file) {
+      const ext = file.name.split('.').pop().toLowerCase();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+
+      if (ext === 'mp3' && window['mpg123-decoder']) {
+        try {
+          return await decodeWithMpg123(arrayBuf);
+        } catch(e) { console.warn('mpg123 fallback to Web Audio:', e); }
+      }
+
+      if (!AudioCtx) throw new Error('เบราว์เซอร์ไม่รองรับ Web Audio API');
+      const ctx = new AudioCtx();
+      if (ctx.state === 'suspended') { try { await ctx.resume(); } catch(_) {} }
+      const res = await decodeRaw(ctx, arrayBuf.slice(0));
+      ctx.close && ctx.close();
+      return res;
+    }
+
+    // ============================================================
+    // HANDLE SELECTED FILE
+    // ============================================================
+    async function handleFile(file) {
+      currentFile = file;
+      hideError();
+      stopAudio();
+      resultsArea.style.display = 'none';
+
+      stripFileName.innerText = file.name;
+      stripFileSize.innerText = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
+
+      loadingBox.style.display = 'block';
+      previewSection.style.display = 'none';
+      document.getElementById('uploadWrap').style.display = 'none';
+
+      try {
+        rawArrayBuffer = await file.arrayBuffer();
+        audioBuffer = await smartDecode(rawArrayBuffer, file);
+        totalDurationSec = audioBuffer.length / audioBuffer.sampleRate;
+
+        // Auto select Lossless if input is MP3
+        const isMp3 = file.name.toLowerCase().endsWith('.mp3');
+        if (isMp3) {
+          formatSelect.value = 'mp3_lossless';
+        } else {
+          formatSelect.value = 'wav';
+        }
+
+        loadingBox.style.display = 'none';
+        previewSection.style.display = 'block';
+
+        updateNamingPreview();
+        recalculateCutsAndRedraw();
+
+      } catch (err) {
+        console.error('File load error:', err);
+        loadingBox.style.display = 'none';
+        document.getElementById('uploadWrap').style.display = 'block';
+        showError('ไม่สามารถอ่านไฟล์เสียงนี้ได้: ' + (err.message || String(err)));
+      }
+    }
+
+    // ============================================================
+    // SMART SPLIT (Silence Finder)
+    // ============================================================
+    function findBestCut(buffer, targetSample, lastSample) {
+      const sr = buffer.sampleRate;
+      const total = buffer.length;
+      const search = Math.round(15 * sr);
+      const minDistance = Math.round(10 * sr);
+
+      const winStart = Math.max(lastSample + minDistance, targetSample - search);
+      const winEnd   = Math.min(total - Math.round(5 * sr), targetSample + search);
+      if (winStart >= winEnd) return targetSample;
+
+      const ch0 = buffer.getChannelData(0);
+      const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
+
+      let best = targetSample, minE = Infinity;
+      const step = Math.round(0.1 * sr);
+      for (let s = winStart; s < winEnd; s += step) {
+        let sum = 0, count = Math.min(step, winEnd - s);
+        for (let j = 0; j < count; j += 4) {
+          const v0 = ch0[s + j];
+          const v1 = ch1 ? ch1[s + j] : v0;
+          sum += v0*v0 + v1*v1;
+        }
+        if (sum < minE) { minE = sum; best = s + Math.round(count / 2); }
+      }
+      return best;
+    }
+
+    function getTargetDuration() {
+      if (durationSelect.value === 'custom') {
+        const val = parseInt(customMinutes.value, 10);
+        return (isNaN(val) || val < 1) ? 30 * 60 : val * 60;
+      }
+      return parseInt(durationSelect.value, 10) || 1800;
+    }
+
+    function onDurationChange() {
+      customRow.style.display = durationSelect.value === 'custom' ? 'flex' : 'none';
+      recalculateCutsAndRedraw();
+    }
+
+    function onCustomMinutesInput() {
+      recalculateCutsAndRedraw();
+    }
+
+    function pushUndoState() {
+      undoStack.push([...cutPointsSec]);
+      if (undoStack.length > 25) undoStack.shift();
+    }
+
+    function undoCutAction() {
+      if (!undoStack.length) return;
+      cutPointsSec = undoStack.pop();
+      updateCutHeaderInfo();
+      drawWaveform();
+    }
+
+    function recalculateCutsAndRedraw() {
+      if (!audioBuffer) return;
+      pushUndoState();
+      const sr = audioBuffer.sampleRate;
+      const totalSamples = audioBuffer.length;
+      const targetDuration = getTargetDuration();
+      const targetSamples = Math.round(targetDuration * sr);
+      const isSmart = smartSplitCheck.checked;
+
+      const cuts = [0];
+      let curr = 0;
+      while (curr + targetSamples < totalSamples) {
+        const rawTarget = curr + targetSamples;
+        const cut = isSmart ? findBestCut(audioBuffer, rawTarget, curr) : rawTarget;
+        cuts.push(cut);
+        curr = cut;
+      }
+      cuts.push(totalSamples);
+      cutPointsSec = cuts.map(c => c / sr);
+
+      updateCutHeaderInfo();
+      drawWaveform();
+    }
+
+    function updateCutHeaderInfo() {
+      const numChunks = cutPointsSec.length - 1;
+      cutBadge.innerText = `${numChunks} ท่อน`;
+      btnExportCount.innerText = numChunks;
+      timeCounter.innerText = `00:00:00 / ${formatTime(totalDurationSec)}`;
+    }
+
+    // ============================================================
+    // ZOOM CONTROL
+    // ============================================================
+    function setZoom(lvl) {
+      zoomLevel = lvl;
+      document.querySelectorAll('.wave-toolbar .tool-btn').forEach(b => {
+        if (b.id === `btnZoom${lvl}`) b.classList.add('active');
+        else if (b.id && b.id.startsWith('btnZoom')) b.classList.remove('active');
+      });
+      drawWaveform();
+    }
+
+    // ============================================================
+    // WAVEFORM RENDERING (Dynamic Zoom + 1px Razor Cut Lines)
+    // ============================================================
+    function drawWaveform() {
+      if (!audioBuffer) return;
+      const dpr = window.devicePixelRatio || 1;
+      const baseW = canvasScrollWrap.clientWidth || 650;
+      const w = baseW * zoomLevel;
+      const h = 135;
+
+      canvasBox.style.width = `${w}px`;
+      waveCanvas.width = w * dpr;
+      waveCanvas.height = h * dpr;
+
+      const ctx = waveCanvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      const centerY = h / 2;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // ขนาดแท่งคลื่น
+      const barW = 1.8;
+      const barGap = 1.6;
+      const barStep = barW + barGap;
+      const numBars = Math.max(10, Math.floor((w - barGap) / barStep));
+      const startX = Math.max(0, (w - (numBars * barStep - barGap)) / 2);
+
+      const ch0 = audioBuffer.getChannelData(0);
+      const ch1 = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : null;
+      const totalLen = audioBuffer.length;
+      const sampleStep = Math.max(1, Math.floor(totalLen / numBars));
+      const maxHalfH = (h / 2) - 18;
+
+      // 1. Shading แต่ละท่อนสลับสีเทาอ่อน
+      for (let i = 0; i < cutPointsSec.length - 1; i++) {
+        const x1 = (cutPointsSec[i] / totalDurationSec) * w;
+        const x2 = (cutPointsSec[i + 1] / totalDurationSec) * w;
+        if (i % 2 === 1) {
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.035)';
+          ctx.fillRect(x1, 0, x2 - x1, h);
+        }
+      }
+
+      // เส้นแกนกลาง
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, centerY);
+      ctx.lineTo(w, centerY);
+      ctx.stroke();
+
+      // 2. แท่งคลื่นเสียงสีดำเทา (Monochrome Charcoal / Slate Black Gradient)
+      const waveGrad = ctx.createLinearGradient(0, centerY - maxHalfH, 0, centerY + maxHalfH);
+      waveGrad.addColorStop(0, '#52525b');   // เทาเข้มด้านบน
+      waveGrad.addColorStop(0.5, '#18181b'); // ดำเข้มตรงกลาง มีมิติ ชัดเจน
+      waveGrad.addColorStop(1, '#52525b');   // เทาเข้มด้านล่าง
+
+      // แท่งคลื่นเสียงส่วนที่ประมวลผลเสร็จแล้ว (Glowing Royal Blue Highlight)
+      const doneGrad = ctx.createLinearGradient(0, centerY - maxHalfH, 0, centerY + maxHalfH);
+      doneGrad.addColorStop(0, '#60a5fa');   // ฟ้าสว่าง
+      doneGrad.addColorStop(0.5, '#2563eb'); // น้ำเงินรอยัลบลูเข้มข้น
+      doneGrad.addColorStop(1, '#60a5fa');   // ฟ้าสว่าง
+
+      const scanX = (currentExportProgressPct / 100) * w;
+
+      for (let i = 0; i < numBars; i++) {
+        const start = i * sampleStep;
+        const end = Math.min(start + sampleStep, totalLen);
+        let maxVal = 0;
+        for (let j = start; j < end; j += 8) {
+          const v = Math.max(Math.abs(ch0[j]), ch1 ? Math.abs(ch1[j]) : 0);
+          if (v > maxVal) maxVal = v;
+        }
+
+        const x = startX + i * barStep;
+
+        // ลูกเล่นคลื่นพลังงานเด้งสปริงแบบมีชีวิต (Dynamic Spring Wave Pulse)
+        let bounceMultiplier = 1.0;
+        if (currentExportProgressPct > 0 && currentExportProgressPct < 100) {
+          const dist = scanX - x;
+          if (dist >= -4 && dist < 32) {
+            const factor = (dist + 4) / 36;
+            bounceMultiplier = 1.0 + Math.sin(factor * Math.PI) * 0.22;
+          }
+        }
+
+        const barH = Math.max(2, maxVal * maxHalfH * 1.9 * bounceMultiplier);
+
+        // สลับสีแท่งคลื่น: ส่วนที่ประมวลผลแล้วจะเป็นสีฟ้า-น้ำเงินสด ส่วนที่ยังไม่ทำเป็นสีดำเทา
+        const isDone = currentExportProgressPct > 0 && ((x / w) * 100 <= currentExportProgressPct);
+        ctx.fillStyle = isDone ? doneGrad : waveGrad;
+
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(x, centerY - barH, barW, barH * 2, barW / 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(x, centerY - barH, barW, barH * 2);
+        }
+      }
+
+      // 3. ละอองแสง Particle วิบวับรอบหัวสแกนเนอร์ (Sparkling Laser Trail)
+      if (currentExportProgressPct > 0 && currentExportProgressPct < 100) {
+        ctx.save();
+        const now = performance.now() * 0.0035;
+        const sparkCount = 10;
+        for (let s = 0; s < sparkCount; s++) {
+          const spX = scanX - (s * 3.4) + Math.sin(now * 1.7 + s * 1.6) * 3;
+          const spY = centerY + Math.sin(now * 2.3 + s * 2.4) * (maxHalfH * 0.82);
+          const spRad = 0.9 + Math.abs(Math.sin(now + s * 1.1)) * 1.3;
+          const spAlpha = 0.35 + Math.abs(Math.sin(now * 1.5 + s)) * 0.55;
+
+          ctx.fillStyle = `rgba(147, 197, 253, ${spAlpha})`;
+          ctx.shadowColor = '#60a5fa';
+          ctx.shadowBlur = 6;
+          ctx.beginPath();
+          ctx.arc(spX, spY, spRad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      // 4. วาดเส้นแบ่งรอยตัด 1px สีแดง คมชัด พร้อมป้าย Part
+      for (let i = 1; i < cutPointsSec.length - 1; i++) {
+        const cutTime = cutPointsSec[i];
+        const rawX = (cutTime / totalDurationSec) * w;
+        const x = Math.floor(rawX) + 0.5;
+
+        // เอฟเฟกต์ Ping วงแหวนสะท้อนเรดาร์เมื่อตัดผ่านรอยตัด
+        if (cutPassTimestamps[i]) {
+          const elapsed = performance.now() - cutPassTimestamps[i];
+          if (elapsed < 550) {
+            const prog = elapsed / 550;
+            const radius = 6 + prog * 20;
+            const alpha = (1 - prog) * 0.85;
+            ctx.save();
+            ctx.strokeStyle = `rgba(59, 130, 246, ${alpha})`;
+            ctx.lineWidth = 2 * (1 - prog);
+            ctx.beginPath();
+            ctx.arc(x, 10, radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+
+        // เส้นประคมกริบ 1px
+        ctx.strokeStyle = (i === hoverCutIndex || i === dragCutIndex) ? '#b91c1c' : '#ef4444';
+        ctx.lineWidth = (i === hoverCutIndex || i === dragCutIndex) ? 1.5 : 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, 21);
+        ctx.lineTo(x, h - 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // ป้ายหัวข้อตัด Part N
+        const label = `Part ${i + 1} (${formatTime(cutTime)})`;
+        ctx.font = '600 9.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        const txtW = ctx.measureText(label).width;
+        const bW = txtW + 10;
+        const bH = 17;
+        const bX = Math.max(2, Math.min(w - bW - 2, x - bW / 2));
+
+        ctx.fillStyle = (i === hoverCutIndex || i === dragCutIndex) ? '#b91c1c' : '#ef4444';
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(bX, 2, bW, bH, 4);
+          ctx.fill();
+        } else {
+          ctx.fillRect(bX, 2, bW, bH);
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, bX + bW / 2, 2 + bH / 2);
+      }
+
+      // ป้าย Part 1
+      if (cutPointsSec.length > 1) {
+        const p1Label = 'Part 1 (00:00:00)';
+        ctx.font = '600 9.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        const p1W = ctx.measureText(p1Label).width + 10;
+        const p1H = 17;
+        ctx.fillStyle = '#334155';
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(4, 2, p1W, p1H, 4);
+          ctx.fill();
+        } else {
+          ctx.fillRect(4, 2, p1W, p1H);
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p1Label, 4 + p1W / 2, 2 + p1H / 2);
+      }
+
+      // 5. คลื่นแสงเฉลิมฉลองเมื่อครบ 100% (Completion Shimmer Flare)
+      if (completionShimmerProgress >= 0 && completionShimmerProgress <= 1.2) {
+        const shimX = completionShimmerProgress * w;
+        const shimW = 75;
+        const shimGrad = ctx.createLinearGradient(shimX - shimW, 0, shimX + shimW, 0);
+        shimGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+        shimGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.45)');
+        shimGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.save();
+        ctx.fillStyle = shimGrad;
+        ctx.fillRect(shimX - shimW, 0, shimW * 2, h);
+        ctx.restore();
+      }
+    }
+
+    window.addEventListener('resize', () => {
+      if (previewSection.style.display === 'block') drawWaveform();
+    });
+
+    // ============================================================
+    // INTERACTIVE CUT PINS: DRAG, ADD, DELETE & AUDITION
+    // ============================================================
+    function getCanvasPos(e) {
+      const clientX = (e.touches && e.touches.length > 0)
+        ? e.touches[0].clientX
+        : (e.changedTouches && e.changedTouches.length > 0)
+          ? e.changedTouches[0].clientX
+          : e.clientX;
+      const rect = canvasBox.getBoundingClientRect();
+      const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+      const sec = (x / rect.width) * totalDurationSec;
+      return { x, sec, totalWidth: rect.width };
+    }
+
+    function findNearbyCutIndex(x, totalW, isTouch = false) {
+      const tolerance = isTouch ? 20 : 8;
+      for (let i = 1; i < cutPointsSec.length - 1; i++) {
+        const lineX = (cutPointsSec[i] / totalDurationSec) * totalW;
+        if (Math.abs(x - lineX) <= tolerance) return i;
+      }
+      return -1;
+    }
+
+    canvasBox.addEventListener('mousemove', e => {
+      if (!totalDurationSec) return;
+      const { x, sec, totalWidth } = getCanvasPos(e);
+
+      if (isDraggingCut && dragCutIndex >= 1) {
+        // อัปเดตตำแหน่งตัดขณะลาก
+        const minSec = cutPointsSec[dragCutIndex - 1] + 1;
+        const maxSec = cutPointsSec[dragCutIndex + 1] - 1;
+        cutPointsSec[dragCutIndex] = Math.max(minSec, Math.min(maxSec, sec));
+        drawWaveform();
+        hoverTag.innerText = formatTime(cutPointsSec[dragCutIndex]);
+        hoverLine.style.display = 'block';
+        hoverLine.style.left = `${x}px`;
+        return;
+      }
+
+      // ตรวจสอบว่าใกล้เส้นแบ่งหรือไม่
+      hoverCutIndex = findNearbyCutIndex(x, totalWidth);
+      if (hoverCutIndex !== -1) {
+        canvasBox.style.cursor = 'col-resize';
+      } else {
+        canvasBox.style.cursor = 'crosshair';
+      }
+
+      hoverLine.style.display = 'block';
+      hoverLine.style.left = `${x}px`;
+      hoverTag.innerText = formatTime(sec);
+    });
+
+    canvasBox.addEventListener('mousedown', e => {
+      if (e.button !== 0 || !totalDurationSec) return; // เฉพาะคลิกซ้าย
+      const { x, totalWidth } = getCanvasPos(e);
+      const nearIdx = findNearbyCutIndex(x, totalWidth);
+      if (nearIdx !== -1) {
+        pushUndoState();
+        isDraggingCut = true;
+        dragCutIndex = nearIdx;
+        stopAudio();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDraggingCut) {
+        isDraggingCut = false;
+        dragCutIndex = -1;
+        updateCutHeaderInfo();
+        drawWaveform();
+      }
+    });
+
+    canvasBox.addEventListener('mouseleave', () => {
+      if (!isDraggingCut) {
+        hoverLine.style.display = 'none';
+        hoverCutIndex = -1;
+      }
+    });
+
+    // Touch Event Handlers สำหรับ Touchscreen / Mobile / Tablet
+    let touchStartTime = 0;
+    let touchStartPos = { x: 0, y: 0 };
+    let touchMoved = false;
+    let lastTapTime = 0;
+
+    canvasBox.addEventListener('touchstart', e => {
+      if (!totalDurationSec || e.touches.length > 1) return;
+      const { x, totalWidth } = getCanvasPos(e);
+      const nearIdx = findNearbyCutIndex(x, totalWidth, true);
+      touchStartTime = Date.now();
+      touchStartPos = { x, y: e.touches[0].clientY };
+      touchMoved = false;
+
+      if (nearIdx !== -1) {
+        e.preventDefault();
+        pushUndoState();
+        isDraggingCut = true;
+        dragCutIndex = nearIdx;
+        stopAudio();
+        hoverLine.style.display = 'block';
+        hoverLine.style.left = `${x}px`;
+        hoverTag.innerText = formatTime(cutPointsSec[nearIdx]);
+      }
+    }, { passive: false });
+
+    canvasBox.addEventListener('touchmove', e => {
+      if (!totalDurationSec) return;
+      const { x, sec } = getCanvasPos(e);
+      const touchY = e.touches[0].clientY;
+      if (Math.abs(x - touchStartPos.x) > 5 || Math.abs(touchY - touchStartPos.y) > 5) {
+        touchMoved = true;
+      }
+
+      if (isDraggingCut && dragCutIndex >= 1) {
+        e.preventDefault();
+        const minSec = cutPointsSec[dragCutIndex - 1] + 1;
+        const maxSec = cutPointsSec[dragCutIndex + 1] - 1;
+        cutPointsSec[dragCutIndex] = Math.max(minSec, Math.min(maxSec, sec));
+        drawWaveform();
+        hoverTag.innerText = formatTime(cutPointsSec[dragCutIndex]);
+        hoverLine.style.display = 'block';
+        hoverLine.style.left = `${x}px`;
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchend', e => {
+      const now = Date.now();
+      if (isDraggingCut) {
+        isDraggingCut = false;
+        dragCutIndex = -1;
+        updateCutHeaderInfo();
+        drawWaveform();
+        setTimeout(() => {
+          hoverLine.style.display = 'none';
+        }, 800);
+        return;
+      }
+
+      // ตรวจสอบ Short Tap / Double Tap บน Touch Devices
+      if (!touchMoved && (now - touchStartTime < 300)) {
+        if (now - lastTapTime < 350) {
+          // Double Tap: เพิ่มจุดตัดใหม่
+          const { sec } = getCanvasPos(e);
+          if (sec >= 5 && sec <= totalDurationSec - 5) {
+            pushUndoState();
+            cutPointsSec.push(sec);
+            cutPointsSec.sort((a, b) => a - b);
+            updateCutHeaderInfo();
+            drawWaveform();
+          }
+          lastTapTime = 0;
+        } else {
+          lastTapTime = now;
+          // Single Tap: Seek เสียง
+          const { x, sec, totalWidth } = getCanvasPos(e);
+          const nearIdx = findNearbyCutIndex(x, totalWidth, true);
+          if (nearIdx === -1) {
+            playPreviewFrom(sec);
+          }
+        }
+      }
+    });
+
+    // ดับเบิลคลิกเพื่อเพิ่มจุดตัดใหม่
+    canvasBox.addEventListener('dblclick', e => {
+      if (!totalDurationSec) return;
+      const { sec } = getCanvasPos(e);
+      if (sec < 5 || sec > totalDurationSec - 5) return;
+
+      pushUndoState();
+      cutPointsSec.push(sec);
+      cutPointsSec.sort((a, b) => a - b);
+      updateCutHeaderInfo();
+      drawWaveform();
+    });
+
+    // คลิกขวาที่เส้นแบ่งเพื่อลบจุดตัด
+    canvasBox.addEventListener('contextmenu', e => {
+      if (!totalDurationSec) return;
+      const { x, totalWidth } = getCanvasPos(e);
+      const nearIdx = findNearbyCutIndex(x, totalWidth);
+      if (nearIdx !== -1) {
+        e.preventDefault();
+        pushUndoState();
+        cutPointsSec.splice(nearIdx, 1);
+        updateCutHeaderInfo();
+        drawWaveform();
+      }
+    });
+
+    // คลิกเพื่อ Seek เสียง (ถ้าไม่ได้คลิกลากเส้น)
+    canvasBox.addEventListener('click', e => {
+      if (!totalDurationSec || isDraggingCut) return;
+      const { x, sec, totalWidth } = getCanvasPos(e);
+      if (findNearbyCutIndex(x, totalWidth) !== -1) return;
+      playPreviewFrom(sec);
+    });
+
+    // ============================================================
+    // AUDITION SPLIT POINT (ฟังรอยตัด ±3 วินาที)
+    // ============================================================
+    function auditionNearestCut() {
+      if (!cutPointsSec.length || cutPointsSec.length <= 2) return;
+      const curTime = (audioPreviewEl && isPlaying) ? audioPreviewEl.currentTime : 0;
+      let nearest = cutPointsSec[1];
+      let minDiff = Infinity;
+      for (let i = 1; i < cutPointsSec.length - 1; i++) {
+        const diff = Math.abs(cutPointsSec[i] - curTime);
+        if (diff < minDiff) { minDiff = diff; nearest = cutPointsSec[i]; }
+      }
+
+      const start = Math.max(0, nearest - 3);
+      playPreviewFrom(start, nearest + 3);
+    }
+
+    // ============================================================
+    // AUDIO PREVIEW & PLAYHEAD
+    // ============================================================
+    function stopAudio() {
+      if (playheadRaf) cancelAnimationFrame(playheadRaf);
+      if (audioPreviewEl) {
+        audioPreviewEl.pause();
+        audioPreviewEl = null;
+      }
+      isPlaying = false;
+      btnWavePlay.innerHTML = '▶';
+      playhead.style.display = 'none';
+    }
+
+    function toggleWavePlay() {
+      if (isPlaying) stopAudio();
+      else playPreviewFrom(0);
+    }
+
+    function playPreviewFrom(startSec, stopAtSec = null) {
+      stopAudio();
+      if (!currentFile) return;
+
+      const url = URL.createObjectURL(currentFile);
+      const audio = new Audio(url);
+      audioPreviewEl = audio;
+      isPlaying = true;
+      btnWavePlay.innerHTML = '⏸';
+      playhead.style.display = 'block';
+
+      audio.currentTime = startSec;
+
+      function onTick() {
+        if (!audioPreviewEl || audioPreviewEl.paused) return;
+        const cur = audioPreviewEl.currentTime;
+
+        if (stopAtSec && cur >= stopAtSec) {
+          stopAudio();
+          return;
+        }
+
+        const pct = (cur / totalDurationSec) * 100;
+        playhead.style.left = `${pct}%`;
+        timeCounter.innerText = `${formatTime(cur)} / ${formatTime(totalDurationSec)}`;
+        playheadRaf = requestAnimationFrame(onTick);
+      }
+
+      audio.onplay = () => { playheadRaf = requestAnimationFrame(onTick); };
+      audio.onended = () => { stopAudio(); URL.revokeObjectURL(url); };
+      audio.onerror = () => { stopAudio(); URL.revokeObjectURL(url); };
+      audio.play().catch(() => stopAudio());
+    }
+
+    // ============================================================
+    // KEYBOARD SHORTCUTS
+    // ============================================================
+    window.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        toggleWavePlay();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        if (audioPreviewEl) playPreviewFrom(Math.max(0, audioPreviewEl.currentTime - 5));
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        if (audioPreviewEl) playPreviewFrom(Math.min(totalDurationSec, audioPreviewEl.currentTime + 5));
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undoCutAction();
+      }
+    });
+
+    // ============================================================
+    // NAMING PATTERN HELPER
+    // ============================================================
+    function insertTag(tag) {
+      namingPattern.value += tag;
+      updateNamingPreview();
+    }
+
+    function getFormattedChunkName(partIndex, startSec, endSec, ext) {
+      const pattern = namingPattern.value.trim() || '{original}_Part{part}';
+      const original = currentFile ? currentFile.name.replace(/\.[^/.]+$/, '') : 'audio';
+      const part = String(partIndex + 1).padStart(2, '0');
+      const start = formatTime(startSec).replace(/:/g, '-');
+      const end = formatTime(endSec).replace(/:/g, '-');
+
+      return pattern
+        .replace(/{original}/g, original)
+        .replace(/{part}/g, part)
+        .replace(/{start}/g, start)
+        .replace(/{end}/g, end) + '.' + ext;
+    }
+
+    function updateNamingPreview() {
+      const ext = formatSelect.value === 'wav' ? 'wav' : 'mp3';
+      const sampleName = getFormattedChunkName(0, 0, 1800, ext);
+      namingPreview.innerText = `ตัวอย่าง: ${sampleName}`;
+    }
+
+    // ============================================================
+    // MICRO-FADE (Anti-Click Zero-Crossing Filter)
+    // ============================================================
+    function applyMicroFade(subBuffer) {
+      const sr = subBuffer.sampleRate;
+      const fadeLen = Math.min(Math.round(sr * 0.02), Math.floor(subBuffer.length / 4)); // 20ms
+      const chs = subBuffer.numberOfChannels;
+      for (let c = 0; c < chs; c++) {
+        const d = subBuffer.getChannelData(c);
+        const len = d.length;
+        for (let i = 0; i < fadeLen; i++) {
+          const factor = 0.5 * (1 - Math.cos((Math.PI * i) / fadeLen));
+          d[i] *= factor;
+          d[len - 1 - i] *= factor;
+        }
+      }
+    }
+
+    // ============================================================
+    // LOSSLESS MP3 DIRECT BITSTREAM SLICER
+    // ============================================================
+    function sliceMp3Lossless(arrayBuf, startSec, endSec) {
+      const bytes = new Uint8Array(arrayBuf);
+      const len = bytes.length;
+      let offset = 0;
+
+      // Skip ID3v2
+      if (len > 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+        const id3Size = ((bytes[6] & 0x7F) << 21) | ((bytes[7] & 0x7F) << 14) | ((bytes[8] & 0x7F) << 7) | (bytes[9] & 0x7F);
+        offset = 10 + id3Size;
+      }
+
+      const bitratesMpeg1L3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+      const bitratesMpeg2L3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0];
+      const sampleRates = {
+        3: [44100, 48000, 32000], // MPEG 1
+        2: [22050, 24000, 16000], // MPEG 2
+        0: [11025, 12000, 8000]   // MPEG 2.5
+      };
+
+      const frames = [];
+      let curTime = 0;
+
+      while (offset < len - 4) {
+        if (bytes[offset] === 0xFF && (bytes[offset + 1] & 0xE0) === 0xE0) {
+          const b1 = bytes[offset + 1], b2 = bytes[offset + 2];
+          const mpegVer = (b1 >> 3) & 0x03;
+          const layer = (b1 >> 1) & 0x03;
+          if (layer === 1 && mpegVer !== 1) {
+            const brIdx = (b2 >> 4) & 0x0F;
+            const srIdx = (b2 >> 2) & 0x03;
+            const padding = (b2 >> 1) & 0x01;
+            const srTable = sampleRates[mpegVer];
+            if (srTable && srIdx < 3 && brIdx > 0 && brIdx < 15) {
+              const sampleRate = srTable[srIdx];
+              const bitrate = (mpegVer === 3 ? bitratesMpeg1L3[brIdx] : bitratesMpeg2L3[brIdx]) * 1000;
+              const frameSize = mpegVer === 3
+                ? Math.floor((144 * bitrate) / sampleRate) + padding
+                : Math.floor((72 * bitrate) / sampleRate) + padding;
+              const frameDuration = (mpegVer === 3 ? 1152 : 576) / sampleRate;
+
+              frames.push({ offset, size: frameSize, time: curTime });
+              curTime += frameDuration;
+              offset += frameSize;
+              continue;
+            }
+          }
+        }
+        offset++;
+      }
+
+      if (frames.length === 0) return null;
+
+      let startOffset = frames[0].offset;
+      let endOffset = len;
+
+      for (let f of frames) {
+        if (f.time <= startSec) startOffset = f.offset;
+        if (f.time <= endSec) endOffset = f.offset + f.size;
+      }
+
+      return new Blob([bytes.subarray(startOffset, endOffset)], { type: 'audio/mpeg' });
+    }
+
+    // ============================================================
+    // EXPORT ENGINE (Lossless, Studio WAV, Lame MP3)
+    // ============================================================
+    async function startExport() {
+      if (!audioBuffer) return;
+      stopAudio();
+      if (exportAnimRaf) cancelAnimationFrame(exportAnimRaf);
+      hideError();
+
+      const numChunks = cutPointsSec.length - 1;
+      const format = formatSelect.value;
+      const sr = audioBuffer.sampleRate;
+      const ch = audioBuffer.numberOfChannels;
+      const applyFade = antiClickCheck.checked;
+      const isLossless = (format === 'mp3_lossless' && currentFile && currentFile.name.toLowerCase().endsWith('.mp3'));
+
+      btnExport.disabled = true;
+      exportProgress.style.display = 'block';
+
+      // เปิดหลอดบอกความคืบหน้าตรงหัวคลื่นเสียง และแถบไฮไลต์
+      if (waveProgressStrip) waveProgressStrip.style.display = 'block';
+      if (waveProgressHighlight) waveProgressHighlight.style.display = 'block';
+
+      cutPassTimestamps = {};
+      completionShimmerProgress = -1;
+
+      function renderProgressVisuals(pct, msg) {
+        currentExportProgressPct = Math.min(100, Math.max(0, pct));
+        const roundPct = Math.round(currentExportProgressPct);
+
+        // ตรวจจับและกระตุ้นวงแหวน Ping เรดาร์เมื่อคลื่นวิ่งตัดผ่านรอยตัด
+        for (let i = 1; i < cutPointsSec.length - 1; i++) {
+          const cutPct = (cutPointsSec[i] / totalDurationSec) * 100;
+          if (currentExportProgressPct >= cutPct && !cutPassTimestamps[i]) {
+            cutPassTimestamps[i] = performance.now();
+          }
+        }
+
+        // 1. หลอดบอกความคืบหน้าตรงหัวคลื่นเสียง
+        if (waveProgressStripFill) waveProgressStripFill.style.width = `${currentExportProgressPct}%`;
+        if (waveProgressStripPct) waveProgressStripPct.innerText = `${roundPct}%`;
+        if (waveProgressStripTxt && msg) waveProgressStripTxt.innerText = msg;
+
+        // 2. แถบ Highlight Overlay บนคลื่นเสียง
+        if (waveProgressHighlight) waveProgressHighlight.style.width = `${currentExportProgressPct}%`;
+        if (waveProgressBadge) waveProgressBadge.innerText = `${roundPct}%`;
+
+        // 3. ปรับสีแท่งคลื่นเสียงแบบเรียลไทม์ (พร้อมคลื่นสปริงและละอองแสง)
+        drawWaveform();
+
+        // 4. Progress bar ด้านล่าง
+        pFill.style.width = `${currentExportProgressPct}%`;
+        if (msg) pTxt.innerText = msg;
+      }
+
+      function smoothGlideProgressTo(targetPct, msg, durationMs = 260) {
+        const fromPct = currentExportProgressPct;
+        const toPct = Math.min(100, Math.max(fromPct, targetPct));
+        if (toPct <= fromPct) {
+          renderProgressVisuals(fromPct, msg);
+          return Promise.resolve();
+        }
+
+        return new Promise(resolve => {
+          const startTime = performance.now();
+          function tick(now) {
+            const elapsed = now - startTime;
+            const progress = Math.min(1, elapsed / durationMs);
+            // Smooth ease-out cubic deceleration
+            const ease = 1 - Math.pow(1 - progress, 3);
+            const val = fromPct + (toPct - fromPct) * ease;
+            renderProgressVisuals(val, msg);
+
+            if (progress < 1) {
+              requestAnimationFrame(tick);
+            } else {
+              renderProgressVisuals(toPct, msg);
+              resolve();
+            }
+          }
+          requestAnimationFrame(tick);
+        });
+      }
+
+      async function triggerCompletionCelebration() {
+        completionShimmerProgress = 0;
+        const dur = 600;
+        const t0 = performance.now();
+        return new Promise(resolve => {
+          function shimTick(now) {
+            const p = (now - t0) / dur;
+            completionShimmerProgress = p * 1.25;
+            drawWaveform();
+            if (p < 1) {
+              requestAnimationFrame(shimTick);
+            } else {
+              completionShimmerProgress = -1;
+              drawWaveform();
+              resolve();
+            }
+          }
+          requestAnimationFrame(shimTick);
+        });
+      }
+
+      renderProgressVisuals(0, 'กำลังเตรียมการตัดแบ่ง...');
+      await new Promise(r => setTimeout(r, 60));
+
+      chunks = [];
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const workCtx = new AudioCtx();
+
+      try {
+        for (let i = 0; i < numChunks; i++) {
+          const sSec = cutPointsSec[i];
+          const eSec = cutPointsSec[i + 1];
+          const ext = format === 'wav' ? 'wav' : 'mp3';
+          const chunkName = getFormattedChunkName(i, sSec, eSec, ext);
+
+          const chunkStartPct = (sSec / totalDurationSec) * 100;
+          const chunkEndPct   = (eSec / totalDurationSec) * 100;
+
+          renderProgressVisuals(Math.max(currentExportProgressPct, chunkStartPct), `กำลังประมวลผลท่อนที่ ${i + 1} จาก ${numChunks}...`);
+          await new Promise(r => setTimeout(r, 0));
+
+          let blob = null;
+
+          // 1. ลองตัดแบบ Lossless Direct Stream Copy ก่อน (เสร็จใน 50ms)
+          if (isLossless && rawArrayBuffer) {
+            blob = sliceMp3Lossless(rawArrayBuffer, sSec, eSec);
+            // เคลื่อนไหวแถบไฮไลต์อย่างนุ่มนวลสมูทต่อเนื่อง 60fps
+            await smoothGlideProgressTo(chunkEndPct, `ตัดท่อนที่ ${i + 1} จาก ${numChunks} สำเร็จ`, 240);
+          }
+
+          // 2. ถ้าไม่ใช่ Lossless หรือ Lossless คืนค่า null ให้ประมวลผลผ่าน PCM
+          if (!blob) {
+            const startSample = Math.round(sSec * sr);
+            const endSample   = Math.min(audioBuffer.length, Math.round(eSec * sr));
+            const len = endSample - startSample;
+
+            const sub = workCtx.createBuffer(ch, len, sr);
+            for (let c = 0; c < ch; c++) {
+              sub.getChannelData(c).set(audioBuffer.getChannelData(c).subarray(startSample, endSample));
+            }
+
+            if (applyFade) applyMicroFade(sub);
+
+            if (format === 'wav') {
+              blob = encodeWav(sub);
+              await smoothGlideProgressTo(chunkEndPct, `สร้างท่อนที่ ${i + 1} จาก ${numChunks} สำเร็จ`, 240);
+            } else {
+              blob = await encodeMp3Async(sub, (fraction) => {
+                const subPct = chunkStartPct + (fraction * (chunkEndPct - chunkStartPct));
+                renderProgressVisuals(subPct, `กำลังแปลงท่อนที่ ${i + 1} (${Math.round(fraction * 100)}%)...`);
+              });
+              await smoothGlideProgressTo(chunkEndPct, `แปลงท่อนที่ ${i + 1} สำเร็จ`, 140);
+            }
+          }
+
+          chunks.push({
+            name: chunkName,
+            blob: blob,
+            startSec: sSec,
+            endSec: eSec,
+            time: `${formatTime(sSec)} - ${formatTime(eSec)}`,
+            size: (blob.size / (1024 * 1024)).toFixed(2)
+          });
+        }
+
+        workCtx.close && workCtx.close();
+        await smoothGlideProgressTo(100, 'ประมวลผลครบทั้งหมด 100% เรียบร้อยแล้ว!', 300);
+        await triggerCompletionCelebration();
+        pTxt.innerText = 'เสร็จเรียบร้อย!';
+        await new Promise(r => setTimeout(r, 300));
+
+        renderChunksList();
+
+      } catch (err) {
+        console.error('Export error:', err);
+        showError(err.message || String(err));
+      } finally {
+        btnExport.disabled = false;
+        setTimeout(() => {
+          exportProgress.style.display = 'none';
+          if (waveProgressStrip) waveProgressStrip.style.display = 'none';
+          if (waveProgressHighlight) waveProgressHighlight.style.display = 'none';
+          currentExportProgressPct = 0;
+          drawWaveform();
+        }, 2500);
+      }
+    }
+
+    function renderChunksList() {
+      chunksContainer.innerHTML = '';
+      chunks.forEach((c, idx) => {
+        const div = document.createElement('div');
+        div.className = 'chunk-item';
+        div.innerHTML = `
+          <div class="chunk-meta">
+            <div class="chunk-title">${c.name}</div>
+            <div class="chunk-time">${c.time} • ${c.size} MB</div>
+          </div>
+          <div class="chunk-actions">
+            <button class="btn btn-sm btn-outline" onclick="playSingleChunk(${idx}, this)">▶ ฟัง</button>
+            <button class="btn btn-sm" onclick="downloadSingle(${idx})">บันทึก</button>
+          </div>
+        `;
+        chunksContainer.appendChild(div);
+      });
+      resultsArea.style.display = 'block';
+      setTimeout(() => resultsArea.scrollIntoView({ behavior: 'smooth' }), 100);
+    }
+
+    let singleAudio = null;
+    let singleBtn = null;
+    function playSingleChunk(idx, btn) {
+      if (singleAudio) {
+        singleAudio.pause();
+        singleAudio = null;
+        if (singleBtn) singleBtn.innerText = '▶ ฟัง';
+        if (singleBtn === btn) return;
+      }
+      stopAudio();
+      const c = chunks[idx];
+      const url = URL.createObjectURL(c.blob);
+      const audio = new Audio(url);
+      singleAudio = audio;
+      singleBtn = btn;
+      btn.innerText = '⏸ หยุด';
+
+      audio.onended = () => { btn.innerText = '▶ ฟัง'; singleAudio = null; URL.revokeObjectURL(url); };
+      audio.onerror = () => { btn.innerText = '▶ ฟัง'; singleAudio = null; URL.revokeObjectURL(url); };
+      audio.play();
+    }
+
+    function downloadSingle(idx) {
+      const c = chunks[idx];
+      const url = URL.createObjectURL(c.blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = c.name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function downloadAllZip() {
+      if (!chunks.length) return;
+      const zip = new JSZip();
+      chunks.forEach(c => zip.file(c.name, c.blob));
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(zipBlob);
+      const base = currentFile ? currentFile.name.replace(/\.[^/.]+$/, '') : 'audio';
+      a.download = `${base}_all_parts.zip`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }
+
+    // ============================================================
+    // PCM WAV ENCODER (16-bit Stereo/Mono)
+    // ============================================================
+    function encodeWav(buffer) {
+      const ch = buffer.numberOfChannels, sr = buffer.sampleRate;
+      const len = buffer.length * ch * 2;
+      const out = new ArrayBuffer(44 + len);
+      const view = new DataView(out);
+      function s(o, str) { for (let i = 0; i < str.length; i++) view.setUint8(o+i, str.charCodeAt(i)); }
+      s(0,'RIFF'); view.setUint32(4, 36+len, true); s(8,'WAVE');
+      s(12,'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+      view.setUint16(22, ch, true); view.setUint32(24, sr, true);
+      view.setUint32(28, sr*ch*2, true); view.setUint16(32, ch*2, true);
+      view.setUint16(34, 16, true); s(36,'data'); view.setUint32(40, len, true);
+
+      const pcm16 = new Int16Array(out, 44);
+      if (ch === 1) {
+        const c0 = buffer.getChannelData(0);
+        for (let i = 0; i < buffer.length; i++) {
+          const val = Math.max(-1, Math.min(1, c0[i]));
+          pcm16[i] = val < 0 ? val * 0x8000 : val * 0x7FFF;
+        }
+      } else {
+        const c0 = buffer.getChannelData(0), c1 = buffer.getChannelData(1);
+        let idx = 0;
+        for (let i = 0; i < buffer.length; i++) {
+          const v0 = Math.max(-1, Math.min(1, c0[i]));
+          pcm16[idx++] = v0 < 0 ? v0 * 0x8000 : v0 * 0x7FFF;
+          const v1 = Math.max(-1, Math.min(1, c1[i]));
+          pcm16[idx++] = v1 < 0 ? v1 * 0x8000 : v1 * 0x7FFF;
+        }
+      }
+      return new Blob([view], { type: 'audio/wav' });
+    }
+
+    // ============================================================
+    // MP3 RE-ENCODER (Non-blocking Async Loop)
+    // ============================================================
+    async function encodeMp3Async(buffer, onProgress) {
+      if (typeof lamejs === 'undefined') throw new Error('lamejs ไม่พร้อมใช้งาน');
+      const ch = buffer.numberOfChannels, sr = buffer.sampleRate;
+      const enc = new lamejs.Mp3Encoder(ch === 1 ? 1 : 2, sr, 192);
+      const left = buffer.getChannelData(0);
+      const right = ch > 1 ? buffer.getChannelData(1) : left;
+      const len = left.length;
+      const lInt = new Int16Array(len), rInt = new Int16Array(len);
+      for (let i = 0; i < len; i++) {
+        const l = Math.max(-1, Math.min(1, left[i]));
+        lInt[i] = l < 0 ? Math.round(l * 0x8000) : Math.round(l * 0x7FFF);
+        if (ch > 1) {
+          const r = Math.max(-1, Math.min(1, right[i]));
+          rInt[i] = r < 0 ? Math.round(r * 0x8000) : Math.round(r * 0x7FFF);
+        } else { rInt[i] = lInt[i]; }
+      }
+
+      const mp3 = [];
+      const blockSize = 1152;
+      for (let i = 0; i < len; i += blockSize) {
+        const lC = lInt.subarray(i, i + blockSize);
+        const rC = rInt.subarray(i, i + blockSize);
+        const b = ch === 1 ? enc.encodeBuffer(lC) : enc.encodeBuffer(lC, rC);
+        if (b.length > 0) mp3.push(new Uint8Array(b));
+        if ((i / blockSize) % 150 === 0) {
+          if (onProgress) onProgress(i / len);
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      const end = enc.flush();
+      if (end.length > 0) mp3.push(new Uint8Array(end));
+      return new Blob(mp3, { type: 'audio/mpeg' });
+    }
+  </script>
+</body>
+</html>
