@@ -29,9 +29,30 @@ if %errorlevel% equ 0 (
 ) else (
     echo.
     echo =======================================================
-    echo   [NOTICE] หากยังไม่ผ่าน สามารถใส่ Personal Access Token
-    echo   หรือตรวจสอบสิทธิ์การเข้าถึง repository
+    echo   [!] หากหน้าต่างยืนยันตัวตนไม่เด้งขึ้นมา
+    echo   คุณสามารถใช้ GitHub Personal Access Token (PAT) ได้
     echo =======================================================
+    echo.
+    echo 1. ไปสร้าง Token ที่: https://github.com/settings/tokens
+    echo    (เลือก Generate new token (classic) และติ๊กถูกที่ [repo])
+    echo 2. นำ Token (ขึ้นต้นด้วย ghp_...) มาวางด้านล่างนี้
+    echo.
+    set /p GHP_TOKEN="วาง GitHub Token ของคุณที่นี่ (หรือกด Enter เพื่อข้าม): "
+    
+    if not "%GHP_TOKEN%"=="" (
+        echo.
+        echo กำลังเชื่อมต่อด้วย Token...
+        git remote set-url origin https://Cosmo13911:%GHP_TOKEN%@github.com/Cosmo13911/voice_spliter.git
+        git -c http.sslVerify=false push -u origin main
+        if %errorlevel% equ 0 (
+            echo.
+            echo =======================================================
+            echo   [SUCCESS] Push สำเร็จเรียบร้อยแล้ว! บันทึกสิทธิ์ถาวรแล้ว
+            echo =======================================================
+        ) else (
+            echo [ERROR] Token ไม่ถูกต้องหรือไม่มีสิทธิ์เข้าถึง repo
+        )
+    )
 )
 
 echo.
