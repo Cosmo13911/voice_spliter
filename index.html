@@ -1005,6 +1005,8 @@
         loadingBox.style.display = 'none';
         previewSection.style.display = 'block';
 
+        try { history.pushState({ page: 'editor' }, ''); } catch (_) {}
+
         updateNamingPreview();
         recalculateCutsAndRedraw();
 
@@ -1940,6 +1942,8 @@
 
     function renderChunksList() {
       chunksContainer.innerHTML = '';
+      const canShare = !!(navigator.canShare && navigator.share);
+
       chunks.forEach((c, idx) => {
         const div = document.createElement('div');
         div.className = 'chunk-item';
@@ -1950,13 +1954,19 @@
           </div>
           <div class="chunk-actions">
             <button type="button" class="btn btn-sm btn-outline" onclick="playSingleChunk(${idx}, this)">▶ ฟัง</button>
-            <button type="button" class="btn btn-sm" onclick="downloadSingle(${idx}, event)">บันทึก</button>
+            <button type="button" class="btn btn-sm" onclick="downloadSingle(${idx}, event)">💾 บันทึก</button>
+            ${canShare ? `<button type="button" class="btn btn-sm btn-outline" onclick="shareSingle(${idx}, event)">↗ แชร์</button>` : ''}
           </div>
         `;
         chunksContainer.appendChild(div);
       });
       resultsArea.style.display = 'block';
       setTimeout(() => resultsArea.scrollIntoView({ behavior: 'smooth' }), 100);
+
+      // บันทึก History State เพื่อป้องกันการย้อนกลับแล้วหน้าหายบน Safari
+      try {
+        history.pushState({ page: 'results' }, '');
+      } catch (_) {}
     }
 
     let singleAudio = null;
@@ -1998,41 +2008,48 @@
       });
     }
 
-    async function downloadSingle(idx, e) {
+    // ดาวน์โหลดไฟล์เดี่ยว: ใช้ application/octet-stream เพื่อบังคับให้ Safari เปิด Download Manager เสมอ (ไม่เปิดเล่นเพลง และไม่เปลี่ยนหน้าเว็บ)
+    function downloadSingle(idx, e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      const c = chunks[idx];
+      if (!c) return;
+
+      const octetBlob = new Blob([c.blob], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(octetBlob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = c.name;
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 10000);
+    }
+
+    // แชร์ไฟล์เดี่ยวผ่าน iOS Share Sheet (Save to Files / LINE / AirDrop)
+    async function shareSingle(idx, e) {
       if (e) { e.preventDefault(); e.stopPropagation(); }
       const c = chunks[idx];
       if (!c) return;
 
       const mime = c.name.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
       const file = new File([c.blob], c.name, { type: mime });
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-      // On iOS / Mobile devices, Web Share API triggers native Save to Files without reloading the page
-      if (isIOS && navigator.canShare && navigator.canShare({ files: [file] })) {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
           await navigator.share({
             files: [file],
             title: c.name
           });
-          return;
         } catch (err) {
-          if (err.name === 'AbortError') return;
+          if (err.name !== 'AbortError') console.warn('Share error:', err);
         }
+      } else {
+        downloadSingle(idx, e);
       }
-
-      // Standard desktop download
-      const url = URL.createObjectURL(c.blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      a.download = c.name;
-      if (isIOS) a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 3000);
     }
 
     async function downloadAllSeparate(e) {
@@ -2048,7 +2065,7 @@
       try {
         for (let i = 0; i < chunks.length; i++) {
           if (btn) btn.innerText = `⏳ บันทึก ${i + 1}/${chunks.length}...`;
-          await downloadSingle(i);
+          downloadSingle(i);
           if (i < chunks.length - 1) {
             await new Promise(r => setTimeout(r, 600));
           }
@@ -2088,36 +2105,21 @@
 
         const base = currentFile ? currentFile.name.replace(/\.[^/.]+$/, '') : 'audio';
         const fileName = `${base}_all_parts.zip`;
-        const file = new File([zipBlob], fileName, { type: 'application/zip' });
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-        // Native iOS Share Sheet: saves directly to Files app with 0 risk of tab navigation/reload
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          try {
-            await navigator.share({
-              files: [file],
-              title: fileName
-            });
-            return;
-          } catch (err) {
-            if (err.name === 'AbortError') return;
-            console.warn('Share sheet failed, fallback to download link', err);
-          }
-        }
-
-        // Standard link download fallback
-        const url = URL.createObjectURL(zipBlob);
+        // บังคับ MIME application/octet-stream เพื่อให้ Safari เด้งป๊อปอัปดาวน์โหลดลงเครื่องโดยตรง ไม่เปิดหน้าใหม่ และไม่รีโหลดหน้าเว็บ
+        const octetBlob = new Blob([zipBlob], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(octetBlob);
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
         a.download = fileName;
-        if (isIOS) a.target = '_blank';
         document.body.appendChild(a);
         a.click();
+
         setTimeout(() => {
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-        }, 4000);
+        }, 15000);
 
       } catch (err) {
         console.error('ZIP generation error:', err);
@@ -2129,6 +2131,32 @@
         }
       }
     }
+
+    // ============================================================
+    // STATE PROTECTION (Prevent losing results on Safari swipe/back)
+    // ============================================================
+    window.addEventListener('popstate', () => {
+      if (chunks && chunks.length > 0) {
+        if (resultsArea) resultsArea.style.display = 'block';
+        if (previewSection) previewSection.style.display = 'block';
+        const uploadWrap = document.getElementById('uploadWrap');
+        if (uploadWrap) uploadWrap.style.display = 'none';
+        try { history.pushState({ page: 'results' }, ''); } catch (_) {}
+      } else if (totalDurationSec) {
+        if (previewSection) previewSection.style.display = 'block';
+        const uploadWrap = document.getElementById('uploadWrap');
+        if (uploadWrap) uploadWrap.style.display = 'none';
+        try { history.pushState({ page: 'editor' }, ''); } catch (_) {}
+      }
+    });
+
+    window.addEventListener('beforeunload', (e) => {
+      if (chunks && chunks.length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    });
 
     // ============================================================
     // PCM WAV ENCODER (16-bit Stereo/Mono)
