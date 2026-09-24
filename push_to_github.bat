@@ -16,6 +16,8 @@ echo กำลังเชื่อมต่อและ Push ไฟล์ขึ
 echo (หากมีหน้าต่างเบราว์เซอร์เด้งขึ้นมา ให้กด "Sign in with your browser" เพื่อยืนยันสิทธิ์)
 echo.
 
+git add index.html text.html
+git commit -m "Fix iOS Safari/Chrome upload and audio decoding freeze"
 git -c http.sslVerify=false -c credential.helper=manager push -u origin main
 
 if %errorlevel% equ 0 (

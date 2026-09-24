@@ -410,7 +410,7 @@
       <!-- 1. Dropzone -->
       <div id="uploadWrap">
         <label class="dropzone" id="dropLabel">
-          <input type="file" id="audioFileInput" accept="audio/*, .mp3, .wav, .m4a, .aac, .flac, .ogg, .weba, .opus">
+          <input type="file" id="audioFileInput" accept="audio/*, audio/mp3, audio/wav, audio/m4a, audio/aac, audio/x-m4a, audio/flac, .mp3, .wav, .m4a, .aac, .flac, .ogg">
           <div class="drop-icon">🎵</div>
           <div class="drop-title">ลากไฟล์เสียงมาวางที่นี่ หรือ คลิกเพื่อเลือกไฟล์</div>
           <div class="drop-sub">รองรับ MP3, WAV, M4A, AAC, FLAC, OGG ทุกขนาดไฟล์</div>
@@ -421,6 +421,9 @@
       <div class="loading-box" id="loadingBox">
         <div class="spinner"></div>
         <div class="loading-txt" id="loadingTxt">กำลังอ่านและสร้างคลื่นเสียง...</div>
+        <button id="iosTapPrompt" type="button" style="display:none; margin:14px auto 0; padding:9px 18px; font-size:0.82rem; font-weight:600; color:#2563eb; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; cursor:pointer;" onclick="unlockAudioContext()">
+          📲 แตะตรงนี้เพื่อเปิดระบบเสียง (สำหรับ iOS)
+        </button>
       </div>
 
       <!-- Error Card -->
@@ -667,6 +670,45 @@
     function triggerFileSelect() { fileInput.click(); }
 
     // ============================================================
+    // IOS WEB AUDIO UNLOCKER & SHARED CONTEXT
+    // ============================================================
+    let sharedAudioCtx = null;
+    let iosPromptTimer = null;
+
+    function getSharedAudioContext() {
+      if (!sharedAudioCtx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          sharedAudioCtx = new AudioCtx();
+        }
+      }
+      return sharedAudioCtx;
+    }
+
+    function unlockAudioContext() {
+      const ctx = getSharedAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+      try {
+        if (ctx) {
+          const buf = ctx.createBuffer(1, 1, 22050);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(ctx.destination);
+          src.start(0);
+        }
+      } catch (_) {}
+      const promptBtn = document.getElementById('iosTapPrompt');
+      if (promptBtn) promptBtn.style.display = 'none';
+    }
+
+    // Attach unlocker to early user interactions (touch, pointer, click)
+    ['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click'].forEach(evt => {
+      window.addEventListener(evt, unlockAudioContext, { passive: true });
+    });
+
+    // ============================================================
     // DRAG & DROP & FILE SELECTION
     // ============================================================
     ['dragenter', 'dragover'].forEach(n => dropLabel.addEventListener(n, e => {
@@ -682,57 +724,184 @@
     fileInput.addEventListener('change', function() {
       if (this.files && this.files.length) handleFile(this.files[0]);
     });
+    dropLabel.addEventListener('pointerdown', unlockAudioContext);
+    fileInput.addEventListener('pointerdown', unlockAudioContext);
+    fileInput.addEventListener('click', unlockAudioContext);
 
     window.addEventListener('dragover', e => e.preventDefault());
     window.addEventListener('drop', e => e.preventDefault());
 
     // ============================================================
-    // FAST DECODE PIPELINE (mpg123 WASM + Web Audio Fallback)
+    // FILE READING WITH PROGRESS & FALLBACK
     // ============================================================
+    function readFileWithFallback(file, onProgress) {
+      return new Promise((resolve, reject) => {
+        let isDone = false;
+        if (typeof FileReader !== 'undefined') {
+          const reader = new FileReader();
+          reader.onprogress = e => {
+            if (e.lengthComputable && onProgress) {
+              const pct = Math.round((e.loaded / e.total) * 100);
+              onProgress(pct);
+            }
+          };
+          reader.onload = () => {
+            if (!isDone) {
+              isDone = true;
+              resolve(reader.result);
+            }
+          };
+          reader.onerror = () => {
+            if (!isDone) {
+              if (file.arrayBuffer) {
+                file.arrayBuffer().then(buf => {
+                  if (!isDone) { isDone = true; resolve(buf); }
+                }).catch(err => {
+                  if (!isDone) { isDone = true; reject(err); }
+                });
+              } else {
+                isDone = true;
+                reject(reader.error || new Error('ไม่สามารถอ่านไฟล์ได้'));
+              }
+            }
+          };
+          try {
+            reader.readAsArrayBuffer(file);
+            return;
+          } catch (e) {
+            console.warn('FileReader failed, fallback to arrayBuffer():', e);
+          }
+        }
+
+        if (file.arrayBuffer) {
+          file.arrayBuffer().then(resolve).catch(reject);
+        } else {
+          reject(new Error('เบราว์เซอร์ไม่รองรับการอ่านไฟล์'));
+        }
+      });
+    }
+
+    // ============================================================
+    // FAST DECODE PIPELINE (mpg123 WASM + OfflineAudioCtx + Web Audio)
+    // ============================================================
+    function decodeAudioBufferWithTimeout(ctx, arrayBuf, timeoutMs = 15000) {
+      return new Promise((resolve, reject) => {
+        let timer = setTimeout(() => {
+          reject(new Error('การถอดรหัสเสียงหมดเวลา (Timeout)'));
+        }, timeoutMs);
+
+        try {
+          const bufCopy = arrayBuf.slice(0);
+          const p = ctx.decodeAudioData(
+            bufCopy,
+            decoded => {
+              clearTimeout(timer);
+              resolve(decoded);
+            },
+            err => {
+              clearTimeout(timer);
+              reject(err instanceof Error ? err : new Error(err ? String(err) : 'ถอดรหัสเสียงไม่สำเร็จ (รูปแบบไฟล์อาจไม่รองรับ)'));
+            }
+          );
+          if (p && typeof p.then === 'function') {
+            p.then(
+              decoded => { clearTimeout(timer); resolve(decoded); },
+              err => { clearTimeout(timer); reject(err instanceof Error ? err : new Error(err ? String(err) : 'ถอดรหัสเสียงไม่สำเร็จ')); }
+            ).catch(() => {});
+          }
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+    }
+
+    async function decodeAudioDataUniversal(arrayBuf) {
+      // 1. ลองถอดรหัสด้วย OfflineAudioContext (ไม่ติดข้อจำกัด Autoplay / Suspended state บน iOS WebKit)
+      const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (OfflineCtx) {
+        try {
+          const offlineCtx = new OfflineCtx(1, 44100, 44100);
+          const res = await decodeAudioBufferWithTimeout(offlineCtx, arrayBuf, 12000);
+          if (res && res.length > 0) return res;
+        } catch (e) {
+          console.warn('OfflineAudioContext decode failed, trying shared AudioContext:', e);
+        }
+      }
+
+      // 2. ลองถอดรหัสด้วย Shared AudioContext ที่ถูกปลดล็อกผ่าน User Gesture
+      const sharedCtx = getSharedAudioContext();
+      if (sharedCtx) {
+        if (sharedCtx.state === 'suspended') {
+          try { await sharedCtx.resume(); } catch (_) {}
+        }
+        try {
+          const res = await decodeAudioBufferWithTimeout(sharedCtx, arrayBuf, 12000);
+          if (res && res.length > 0) return res;
+        } catch (e) {
+          console.warn('Shared AudioContext decode failed, trying fresh context:', e);
+        }
+      }
+
+      // 3. Fallback: Fresh AudioContext
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const freshCtx = new AudioCtx();
+        try {
+          if (freshCtx.state === 'suspended') {
+            try { await freshCtx.resume(); } catch (_) {}
+          }
+          const res = await decodeAudioBufferWithTimeout(freshCtx, arrayBuf, 12000);
+          freshCtx.close && freshCtx.close();
+          return res;
+        } catch (e) {
+          freshCtx.close && freshCtx.close();
+          throw e;
+        }
+      }
+
+      throw new Error('อุปกรณ์หรือเบราว์เซอร์ไม่รองรับ Web Audio API');
+    }
+
     async function decodeWithMpg123(arrayBuf) {
       const lib = window['mpg123-decoder'];
       if (!lib || !lib.MPEGDecoder) throw new Error('mpg123-decoder not ready');
       const decoder = new lib.MPEGDecoder();
-      await decoder.ready;
+
+      // ป้องกัน decoder.ready ค้างบนมือถือ
+      await Promise.race([
+        decoder.ready,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('MPEGDecoder init timeout')), 3000))
+      ]);
+
       try {
         const res = decoder.decode(new Uint8Array(arrayBuf));
         if (!res || !res.channelData || !res.samplesDecoded) throw new Error('decode empty');
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        const ctx = new AudioCtx();
+        const ctx = getSharedAudioContext() || (AudioCtx ? new AudioCtx() : null);
+        if (!ctx) throw new Error('Web Audio not available');
         const numCh = res.channelData.length;
         const buf = ctx.createBuffer(numCh, res.samplesDecoded, res.sampleRate);
         for (let c = 0; c < numCh; c++) buf.getChannelData(c).set(res.channelData[c]);
-        ctx.close && ctx.close();
         return buf;
       } finally {
         decoder.free();
       }
     }
 
-    function decodeRaw(ctx, buf) {
-      return new Promise((resolve, reject) => {
-        try {
-          ctx.decodeAudioData(buf, resolve, e => reject(e instanceof Error ? e : new Error(String(e))));
-        } catch(e) { reject(e); }
-      });
-    }
-
     async function smartDecode(arrayBuf, file) {
       const ext = file.name.split('.').pop().toLowerCase();
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      loadingTxt.innerText = 'กำลังถอดรหัสและวิเคราะห์คลื่นเสียง...';
 
       if (ext === 'mp3' && window['mpg123-decoder']) {
         try {
           return await decodeWithMpg123(arrayBuf);
-        } catch(e) { console.warn('mpg123 fallback to Web Audio:', e); }
+        } catch(e) {
+          console.warn('mpg123 decode fallback to Web Audio:', e);
+        }
       }
 
-      if (!AudioCtx) throw new Error('เบราว์เซอร์ไม่รองรับ Web Audio API');
-      const ctx = new AudioCtx();
-      if (ctx.state === 'suspended') { try { await ctx.resume(); } catch(_) {} }
-      const res = await decodeRaw(ctx, arrayBuf.slice(0));
-      ctx.close && ctx.close();
-      return res;
+      return await decodeAudioDataUniversal(arrayBuf);
     }
 
     // ============================================================
@@ -748,11 +917,25 @@
       stripFileSize.innerText = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
 
       loadingBox.style.display = 'block';
+      const promptBtn = document.getElementById('iosTapPrompt');
+      if (promptBtn) promptBtn.style.display = 'none';
       previewSection.style.display = 'none';
       document.getElementById('uploadWrap').style.display = 'none';
 
+      // แสดงปุ่มช่วยเหลือกรณี iOS ติด Suspended State นานกว่า 2.5 วินาที
+      clearTimeout(iosPromptTimer);
+      iosPromptTimer = setTimeout(() => {
+        if (loadingBox.style.display === 'block' && promptBtn) {
+          promptBtn.style.display = 'inline-block';
+        }
+      }, 2500);
+
       try {
-        rawArrayBuffer = await file.arrayBuffer();
+        loadingTxt.innerText = 'กำลังอ่านไฟล์เสียง...';
+        rawArrayBuffer = await readFileWithFallback(file, pct => {
+          loadingTxt.innerText = `กำลังอ่านไฟล์เสียง (${pct}%)...`;
+        });
+
         audioBuffer = await smartDecode(rawArrayBuffer, file);
         totalDurationSec = audioBuffer.length / audioBuffer.sampleRate;
 
@@ -764,6 +947,7 @@
           formatSelect.value = 'wav';
         }
 
+        clearTimeout(iosPromptTimer);
         loadingBox.style.display = 'none';
         previewSection.style.display = 'block';
 
@@ -771,10 +955,11 @@
         recalculateCutsAndRedraw();
 
       } catch (err) {
+        clearTimeout(iosPromptTimer);
         console.error('File load error:', err);
         loadingBox.style.display = 'none';
         document.getElementById('uploadWrap').style.display = 'block';
-        showError('ไม่สามารถอ่านไฟล์เสียงนี้ได้: ' + (err.message || String(err)));
+        showError('ไม่สามารถอ่านไฟล์เสียงนี้ได้: ' + (err.message || String(err)) + '\n\n💡 คำแนะนำสำหรับ iPhone/iOS:\n• หากไฟล์อยู่ใน iCloud Drive กรุณาเปิดแอป Files (ไฟล์) เพื่อให้เครื่องดาวน์โหลดไฟล์ลงเครื่องก่อน\n• รองรับไฟล์ MP3, WAV, M4A, AAC เป็นมาตรฐาน');
       }
     }
 
@@ -1609,8 +1794,7 @@
       await new Promise(r => setTimeout(r, 60));
 
       chunks = [];
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const workCtx = new AudioCtx();
+      const workCtx = getSharedAudioContext() || new (window.AudioContext || window.webkitAudioContext)();
 
       try {
         for (let i = 0; i < numChunks; i++) {
@@ -1669,7 +1853,9 @@
           });
         }
 
-        workCtx.close && workCtx.close();
+        if (workCtx && workCtx !== sharedAudioCtx && workCtx.close) {
+          workCtx.close();
+        }
         await smoothGlideProgressTo(100, 'ประมวลผลครบทั้งหมด 100% เรียบร้อยแล้ว!', 300);
         await triggerCompletionCelebration();
         pTxt.innerText = 'เสร็จเรียบร้อย!';
