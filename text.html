@@ -573,7 +573,10 @@
         <div class="results-area" id="resultsArea">
           <div class="results-header">
             <div class="results-title">ไฟล์ที่ตัดเสร็จแล้ว</div>
-            <button class="btn btn-sm btn-secondary" onclick="downloadAllZip()">ดาวน์โหลดทั้งหมด (.ZIP)</button>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button type="button" class="btn btn-sm btn-outline" id="btnDownloadSeparate" onclick="downloadAllSeparate(event)">⬇️ บันทึกทีละไฟล์</button>
+              <button type="button" class="btn btn-sm btn-secondary" id="btnDownloadZip" onclick="downloadAllZip(event)">📦 ดาวน์โหลด (.ZIP)</button>
+            </div>
           </div>
           <div id="chunksContainer"></div>
         </div>
@@ -1946,8 +1949,8 @@
             <div class="chunk-time">${c.time} • ${c.size} MB</div>
           </div>
           <div class="chunk-actions">
-            <button class="btn btn-sm btn-outline" onclick="playSingleChunk(${idx}, this)">▶ ฟัง</button>
-            <button class="btn btn-sm" onclick="downloadSingle(${idx})">บันทึก</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="playSingleChunk(${idx}, this)">▶ ฟัง</button>
+            <button type="button" class="btn btn-sm" onclick="downloadSingle(${idx}, event)">บันทึก</button>
           </div>
         `;
         chunksContainer.appendChild(div);
@@ -1958,45 +1961,173 @@
 
     let singleAudio = null;
     let singleBtn = null;
+    let singleAudioUrl = null;
+
     function playSingleChunk(idx, btn) {
       if (singleAudio) {
         singleAudio.pause();
         singleAudio = null;
+        if (singleAudioUrl) {
+          URL.revokeObjectURL(singleAudioUrl);
+          singleAudioUrl = null;
+        }
         if (singleBtn) singleBtn.innerText = '▶ ฟัง';
         if (singleBtn === btn) return;
       }
       stopAudio();
       const c = chunks[idx];
-      const url = URL.createObjectURL(c.blob);
-      const audio = new Audio(url);
+      singleAudioUrl = URL.createObjectURL(c.blob);
+      const audio = new Audio(singleAudioUrl);
       singleAudio = audio;
       singleBtn = btn;
       btn.innerText = '⏸ หยุด';
 
-      audio.onended = () => { btn.innerText = '▶ ฟัง'; singleAudio = null; URL.revokeObjectURL(url); };
-      audio.onerror = () => { btn.innerText = '▶ ฟัง'; singleAudio = null; URL.revokeObjectURL(url); };
-      audio.play();
+      audio.onended = () => {
+        btn.innerText = '▶ ฟัง';
+        singleAudio = null;
+        if (singleAudioUrl) { URL.revokeObjectURL(singleAudioUrl); singleAudioUrl = null; }
+      };
+      audio.onerror = () => {
+        btn.innerText = '▶ ฟัง';
+        singleAudio = null;
+        if (singleAudioUrl) { URL.revokeObjectURL(singleAudioUrl); singleAudioUrl = null; }
+      };
+      audio.play().catch(() => {
+        btn.innerText = '▶ ฟัง';
+        singleAudio = null;
+      });
     }
 
-    function downloadSingle(idx) {
+    async function downloadSingle(idx, e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
       const c = chunks[idx];
+      if (!c) return;
+
+      const mime = c.name.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+      const file = new File([c.blob], c.name, { type: mime });
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+      // On iOS / Mobile devices, Web Share API triggers native Save to Files without reloading the page
+      if (isIOS && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: c.name
+          });
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+        }
+      }
+
+      // Standard desktop download
       const url = URL.createObjectURL(c.blob);
       const a = document.createElement('a');
-      a.href = url; a.download = c.name;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      a.style.display = 'none';
+      a.href = url;
+      a.download = c.name;
+      if (isIOS) a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 3000);
     }
 
-    async function downloadAllZip() {
+    async function downloadAllSeparate(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
       if (!chunks.length) return;
-      const zip = new JSZip();
-      chunks.forEach(c => zip.file(c.name, c.blob));
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(zipBlob);
-      const base = currentFile ? currentFile.name.replace(/\.[^/.]+$/, '') : 'audio';
-      a.download = `${base}_all_parts.zip`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      const btn = document.getElementById('btnDownloadSeparate');
+      const origText = btn ? btn.innerText : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ กำลังบันทึก...';
+      }
+
+      try {
+        for (let i = 0; i < chunks.length; i++) {
+          if (btn) btn.innerText = `⏳ บันทึก ${i + 1}/${chunks.length}...`;
+          await downloadSingle(i);
+          if (i < chunks.length - 1) {
+            await new Promise(r => setTimeout(r, 600));
+          }
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = origText;
+        }
+      }
+    }
+
+    async function downloadAllZip(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      if (!chunks.length) return;
+
+      const btn = document.getElementById('btnDownloadZip');
+      const origText = btn ? btn.innerText : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ กำลังรวมไฟล์ ZIP...';
+      }
+
+      try {
+        const zip = new JSZip();
+        chunks.forEach(c => zip.file(c.name, c.blob));
+
+        // Use STORE (no compression) to minimize memory & run in ~50ms
+        const zipBlob = await zip.generateAsync({
+          type: 'blob',
+          compression: 'STORE'
+        }, (metadata) => {
+          if (btn && metadata.percent) {
+            btn.innerText = `⏳ รวม ZIP (${Math.round(metadata.percent)}%)...`;
+          }
+        });
+
+        const base = currentFile ? currentFile.name.replace(/\.[^/.]+$/, '') : 'audio';
+        const fileName = `${base}_all_parts.zip`;
+        const file = new File([zipBlob], fileName, { type: 'application/zip' });
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+        // Native iOS Share Sheet: saves directly to Files app with 0 risk of tab navigation/reload
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({
+              files: [file],
+              title: fileName
+            });
+            return;
+          } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.warn('Share sheet failed, fallback to download link', err);
+          }
+        }
+
+        // Standard link download fallback
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = fileName;
+        if (isIOS) a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 4000);
+
+      } catch (err) {
+        console.error('ZIP generation error:', err);
+        showError('ไม่สามารถสร้างไฟล์ ZIP ได้: ' + (err.message || String(err)));
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = origText;
+        }
+      }
     }
 
     // ============================================================
